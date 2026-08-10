@@ -13,35 +13,48 @@ def split_upn(upn: str):
     return name.strip().lower(), domain.strip().lower()
 
 
-def ad_authenticate(upn: str, password: str) -> bool:
+def ad_authenticate(upn: str, password: str) -> dict | None:
+    """Возвращает данные пользователя из AD при успешной аутентификации."""
     s = get_settings()
-    log.info("Попытка входа: %s | dev_mode=%s | домен в настройках=%r",
-             upn, s.dev_mode, s.ad_domain)
-
     parsed = split_upn(upn)
     if not parsed:
-        log.warning("ОТКАЗ: логин не в формате user@domain")
-        return False
+        log.warning("Неверный формат UPN: %s", upn)
+        return None
     name, domain = parsed
-
-    if domain != s.ad_domain.strip().lower():
-        log.warning("ОТКАЗ: домен логина %r не совпадает с доменом настроек %r",
-                    domain, s.ad_domain)
-        return False
+    if domain != s.ad_domain.lower():
+        log.warning("Домен %r не совпадает с %r", domain, s.ad_domain)
+        return None
 
     if s.dev_mode:
-        log.warning(
-            "DEV MODE: пароль не проверяется, доступ разрешён для %s", upn)
-        return True
+        log.warning("DEV MODE: пропуск проверки AD для %s", upn)
+        return {"upn": upn, "name": name, "display_name": name}
 
     try:
         server = Server(s.ad_server, connect_timeout=5)
-        conn = Connection(server, user=upn, password=password,
-                          auto_bind=False, receive_timeout=10)
-        ok = bool(conn.bind())
+        conn = Connection(server, user=upn, password=password, auto_bind=True)
+
+        # Получаем данные пользователя из AD
+        conn.search(
+            search_base=s.ad_search_base,
+            search_filter=f"(userPrincipalName={upn})",
+            attributes=["displayName", "mail", "department"]
+        )
+
+        if not conn.entries:
+            log.warning("Пользователь %s не найден в AD", upn)
+            conn.unbind()
+            return None
+
+        entry = conn.entries[0]
         conn.unbind()
-        log.info("LDAP bind: %s", ok)
-        return ok
+
+        return {
+            "upn": upn,
+            "name": name,
+            "display_name": str(entry.displayName) if entry.displayName else name,
+            "email": str(entry.mail) if entry.mail else "",
+            "department": str(entry.department) if entry.department else "",
+        }
     except Exception:
-        log.exception("LDAP bind failed")
-        return False
+        log.exception("LDAP bind failed для %s", upn)
+        return None

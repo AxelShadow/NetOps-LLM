@@ -166,6 +166,7 @@
         <b>NetOps LLM</b>
         <button id="nav_chat" class="active" onclick="showChat()">Чат</button>
         <button id="nav_dev" onclick="showDevices()">Инвентарь</button>
+        <button id="nav_users" onclick="showUsers()">Пользователи</button>
         <span id="whoami" style="margin-left:auto"></span>
     </header>
 
@@ -270,7 +271,45 @@
                 init();
             } catch (e) { l_err.textContent = e.message; }
         }
+        // В блок <div id="users" class="hidden">
+        async function loadUsers() {
+            usersData = await (await api("/api/users")).json();
+            usersRows.innerHTML = "";
+            for (const u of usersData) {
+                const tr = document.createElement("tr");
+                tr.innerHTML = `<td>${u.username}</td><td>${u.display_name}</td>
+      <td>${u.role}</td><td>${u.granted_by}</td>`;
+                const td = document.createElement("td");
+                if (myRole === "admin") {
+                    const select = document.createElement("select");
+                    select.innerHTML = ["viewer", "engineer", "admin"]
+                        .map(r => `<option value="${r}" ${r === u.role ? "selected" : ""}>${r}</option>`).join("");
+                    select.onchange = () => changeRole(u.username, select.value);
+                    td.appendChild(select);
+                }
+                tr.appendChild(td);
+                usersRows.appendChild(tr);
+            }
+        }
 
+        async function changeRole(username, role) {
+            try {
+                await api(`/api/users/${encodeURIComponent(username)}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ role })
+                });
+                loadUsers();
+            } catch (e) { alert(e.message); }
+        }
+        function showUsers() {
+            users.classList.remove("hidden");
+            chat.classList.add("hidden");
+            devices.classList.add("hidden");
+            nav_users.classList.add("active");
+            nav_chat.classList.remove("active");
+            nav_dev.classList.remove("active");
+            loadUsers();
+        }
         function logout() { localStorage.removeItem("token"); location.reload(); }
 
         async function init() {

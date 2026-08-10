@@ -1,3 +1,4 @@
+from ..db import SessionLocal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -42,23 +43,38 @@ def _normalize(username: str) -> str:
 
 # ---------- вход ----------
 
-@router.post("/auth/login")
-def login(data: LoginIn, db: Session = Depends(get_db)):
-    if not ad_authenticate(data.username, data.password):
+
+@router.post("/login")
+def login(creds: LoginIn):
+    user_data = ad_authenticate(creds.username, creds.password)
+    if not user_data:
         raise HTTPException(401, "Неверный логин или пароль")
-    name, _ = split_upn(data.username)
-    user = db.query(User).filter(User.username == name).first()
-    if not user:
-        raise HTTPException(
-            403, "Доступ не предоставлен. Обратитесь к администратору.")
-    if not user.is_active:
-        raise HTTPException(403, "Учётная запись отключена.")
-    return {
-        "token": create_token(user.id, user.username, user.role.value),
-        "user": {"username": user.username,
-                 "display_name": user.display_name,
-                 "role": user.role.value},
-    }
+
+    upn = user_data["upn"]
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.username == upn.lower()).first()
+
+        if not user:
+            # Авто-регистрация
+            s = get_settings()
+            if not s.auto_register_users:
+                raise HTTPException(
+                    403, "Доступ не предоставлен. Обратитесь к администратору.")
+
+            user = User(
+                username=upn.lower(),
+                display_name=user_data["display_name"],
+                role=Role.viewer,  # Базовая роль
+                granted_by="auto-register"
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            log.info("Авто-регистрация: %s (viewer)", upn)
+
+        token = create_token(user.username, user.role.value)
+        return {"token": token}
 
 
 @router.get("/auth/me")

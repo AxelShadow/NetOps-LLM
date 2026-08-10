@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     zabbix_url: str = ""
     zabbix_token: str = ""
 
+    ad_search_base: str = "DC=id,DC=samges,DC=ru"
+    auto_register_users: bool = True  # Авто-регистрация при первом входе
+
     dev_mode: bool = False
 
 
