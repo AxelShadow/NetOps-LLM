@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: netops
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?задайте в .env}
+      POSTGRES_DB: netops
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  app:
+    build: ./backend
+    env_file: .env
+    depends_on: [db]
+    restart: unless-stopped
+
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend:/usr/share/nginx/html:ro
+    depends_on: [app]
+    restart: unless-stopped
+
+volumes:
+  pgdata:

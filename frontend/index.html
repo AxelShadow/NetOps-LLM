@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="ru">
+
+<head>
+    <meta charset="utf-8">
+    <title>NetOps LLM</title>
+    <style>
+        body {
+            font-family: system-ui;
+            margin: 0;
+            background: #f6f7f9;
+            display: flex;
+            flex-direction: column;
+            height: 100vh
+        }
+
+        header {
+            background: #1e293b;
+            color: #fff;
+            padding: 10px 16px;
+            display: flex;
+            gap: 10px;
+            align-items: center
+        }
+
+        header b {
+            margin-right: 6px
+        }
+
+        header button {
+            background: #334155;
+            color: #fff;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer
+        }
+
+        header button.active {
+            background: #2563eb
+        }
+
+        #login,
+        #chat,
+        #devices {
+            max-width: 900px;
+            margin: 0 auto;
+            width: 100%;
+            padding: 16px;
+            box-sizing: border-box
+        }
+
+        #log {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px
+        }
+
+        .zbx {
+            background: #eef1f4;
+            color: #475569
+        }
+
+        .badge {
+            background: #cbd5e1;
+            border-radius: 4px;
+            padding: 1px 6px;
+            font-size: 12px
+        }
+
+        .msg {
+            padding: 10px 14px;
+            border-radius: 10px;
+            max-width: 85%;
+            white-space: pre-wrap
+        }
+
+        .user {
+            background: #dbeafe;
+            align-self: flex-end
+        }
+
+        .assistant {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            align-self: flex-start
+        }
+
+        .err {
+            color: #b91c1c
+        }
+
+        input,
+        button,
+        select {
+            padding: 8px 10px;
+            border-radius: 6px;
+            border: 1px solid #cbd5e1
+        }
+
+        #composer {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px
+        }
+
+        #composer input {
+            flex: 1
+        }
+
+        .hidden {
+            display: none !important
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            background: #fff
+        }
+
+        th,
+        td {
+            border: 1px solid #e2e8f0;
+            padding: 6px 10px;
+            text-align: left;
+            font-size: 14px
+        }
+
+        th {
+            background: #f1f5f9
+        }
+
+        #devform {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 14px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px
+        }
+
+        #devform .full {
+            grid-column: 1/3;
+            display: flex;
+            gap: 8px;
+            align-items: center
+        }
+
+        .off {
+            opacity: .45
+        }
+
+        .hint {
+            color: #64748b;
+            font-size: 12px
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <b>NetOps LLM</b>
+        <button id="nav_chat" class="active" onclick="showChat()">Чат</button>
+        <button id="nav_dev" onclick="showDevices()">Инвентарь</button>
+        <span id="whoami" style="margin-left:auto"></span>
+    </header>
+
+    <div id="login">
+        <h2>Вход</h2>
+        <p><input id="l_user" placeholder="user@corp.local" style="width:100%"></p>
+        <p><input id="l_pass" type="password" placeholder="Пароль" style="width:100%"></p>
+        <p id="l_err" class="err"></p>
+        <button onclick="doLogin()">Войти</button>
+    </div>
+
+    <div id="chat" class="hidden" style="display:flex;flex-direction:column;height:calc(100vh - 56px)">
+        <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+            <button onclick="newConv()">Новый диалог</button>
+            <select id="model"></select>
+            <span id="status" style="color:#64748b"></span>
+        </div>
+        <div id="log"></div>
+        <div id="composer">
+            <input id="msg" placeholder="Сообщение..." onkeydown="if(event.key==='Enter')send()">
+            <button onclick="send()">Отправить</button>
+        </div>
+    </div>
+
+    <div id="devices" class="hidden">
+        <h2>Инвентарь устройств</h2>
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
+            <button onclick="syncZabbix()">Синхронизировать с Zabbix</button>
+            <select id="f_group" onchange="renderDevices()"></select>
+            <button onclick="toggleGroup(true)">Вкл. группу</button>
+            <button onclick="toggleGroup(false)">Выкл. группу</button>
+            <input id="f_name" placeholder="Поиск по имени…" oninput="renderDevices()" style="margin-left:auto">
+        </div>
+        <form id="devform" onsubmit="saveDevice(event)">
+            <input type="hidden" id="d_id">
+            <input id="d_name" placeholder="Имя (например, vcenter)" required>
+            <select id="d_type">
+                <option value="vcenter">vcenter</option>
+                <option value="esxi">esxi</option>
+                <option value="eltex">eltex</option>
+                <option value="edgecore">edgecore</option>
+                <option value="snr">snr</option>
+                <option value="aruba">aruba</option>
+                <option value="other">other</option>
+            </select>
+            <input id="d_host" placeholder="Адрес (IP или имя)" required>
+            <input id="d_port" placeholder="Порт (0 = по умолчанию)" type="number" value="0">
+            <input id="d_user" placeholder="Имя пользователя">
+            <input id="d_pass" placeholder="Пароль" type="password" autocomplete="new-password">
+            <input id="d_desc" placeholder="Описание" class="full">
+            <div class="full">
+                <button type="submit">Сохранить</button>
+                <button type="button" onclick="resetForm()">Очистить</button>
+                <span class="hint" id="d_hint"></span>
+            </div>
+        </form>
+        <table>
+            <thead>
+                <tr>
+                    <th>Имя</th>
+                    <th>Тип</th>
+                    <th>Источник</th>
+                    <th>Группа</th>
+                    <th>Хост:порт</th>
+                    <th>Логин</th>
+                    <th>Описание</th>
+                    <th>Статус</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody id="devrows"></tbody>
+        </table>
+    </div>
+
+    <script>
+        let token = localStorage.getItem("token") || "";
+        let convId = null;
+        let myRole = "";
+        let devicesData = [];
+
+        async function api(path, opts = {}) {
+            opts.headers = Object.assign({
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + token
+            }, opts.headers || {});
+            const r = await fetch(path, opts);
+            if (r.status === 401) { logout(); throw new Error("Сессия истекла"); }
+            if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+            return r;
+        }
+
+        async function doLogin() {
+            try {
+                const r = await fetch("/api/auth/login", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username: l_user.value, password: l_pass.value })
+                });
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.detail);
+                token = d.token; localStorage.setItem("token", token);
+                init();
+            } catch (e) { l_err.textContent = e.message; }
+        }
+
+        function logout() { localStorage.removeItem("token"); location.reload(); }
+
+        async function init() {
+            const me = await (await api("/api/auth/me")).json();
+            myRole = me.role;
+            whoami.textContent = `${me.username} (${me.role}) `;
+            if (myRole !== "admin") nav_dev.classList.add("hidden");
+            login.classList.add("hidden");
+            chat.classList.remove("hidden");
+            const d = await (await api("/api/models")).json();
+            model.innerHTML = d.models.map(m => `<option>${m}</option>`).join("");
+            await newConv();
+        }
+
+        function showChat() {
+            chat.classList.remove("hidden"); devices.classList.add("hidden");
+            nav_chat.classList.add("active"); nav_dev.classList.remove("active");
+        }
+        function showDevices() {
+            devices.classList.remove("hidden"); chat.classList.add("hidden");
+            nav_dev.classList.add("active"); nav_chat.classList.remove("active");
+            loadDevices();
+        }
+
+        async function newConv() {
+            convId = (await (await api("/api/conversations", { method: "POST" })).json()).id;
+            log.innerHTML = "";
+        }
+
+        function addMsg(role, text) {
+            const el = document.createElement("div");
+            el.className = "msg " + role; el.textContent = text;
+            log.appendChild(el); log.scrollTop = log.scrollHeight;
+            return el;
+        }
+
+        function addTool(text) {
+            const t = document.createElement("div");
+            t.style.cssText = "color:#64748b;font-size:12px;padding:2px 8px";
+            t.textContent = text;
+            log.appendChild(t); log.scrollTop = log.scrollHeight;
+        }
+
+        async function send() {
+            const text = msg.value.trim();
+            if (!text || !convId) return;
+            msg.value = "";
+            addMsg("user", text);
+            const el = addMsg("assistant", "");
+            const r = await api(`/api/conversations/${convId}/messages`,
+                { method: "POST", body: JSON.stringify({ content: text, model: model.value || null }) });
+            const reader = r.body.getReader(), dec = new TextDecoder();
+            let buf = "";
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += dec.decode(value);
+                let i;
+                while ((i = buf.indexOf("\n\n")) >= 0) {
+                    const line = buf.slice(0, i); buf = buf.slice(i + 2);
+                    if (!line.startsWith("data: ")) continue;
+                    const payload = line.slice(6);
+                    if (payload === "[DONE]") continue;
+                    const d = JSON.parse(payload);
+                    if (d.error) { el.classList.add("err"); el.textContent = d.error; }
+                    else if (d.delta) { el.textContent += d.delta; log.scrollTop = log.scrollHeight; }
+                    else if (d.tool) { addTool(`🔧 ${d.tool}: ${JSON.stringify(d.args)}`); }
+                    else if (d.tool_result) {
+                        const mark = d.tool_result.ok ? "✔" : "✖";
+                        addTool(`${mark} ${d.tool_result.name}: ${d.tool_result.preview.slice(0, 120)}`);
+                    }
+                }
+            }
+        }
+
+        /* ---------- Инвентарь ---------- */
+
+        async function loadDevices() {
+            devicesData = await (await api("/api/devices")).json();
+            fillGroupFilter();
+            renderDevices();
+        }
+
+        function fillGroupFilter() {
+            const groups = [...new Set(devicesData.map(d => d.group).filter(Boolean))].sort();
+            const cur = f_group.value;
+            f_group.innerHTML = `<option value="">Все группы (${devicesData.length})</option>` +
+                groups.map(g => `<option>${g}</option>`).join("");
+            if (groups.includes(cur)) f_group.value = cur;
+        }
+
+        function renderDevices() {
+            const g = f_group.value, q = f_name.value.trim().toLowerCase();
+            devrows.innerHTML = "";
+            for (const d of devicesData) {
+                if (g && d.group !== g) continue;
+                if (q && !d.name.includes(q)) continue;
+                const tr = document.createElement("tr");
+                tr.className = d.source === "zabbix" ? "zbx" : "";
+                if (!d.enabled) tr.className += " off";
+                const src = d.source === "zabbix" ? '<span class="badge">Zabbix</span>' : "вручную";
+                tr.innerHTML = `<td>${d.name}</td><td>${d.type}</td><td>${src}</td>
+      <td>${d.group || ""}</td><td>${d.host}:${d.port}</td><td>${d.username}</td>
+      <td>${d.description || ""}</td><td>${d.enabled ? "вкл" : "выкл"}</td>`;
+                const td = document.createElement("td");
+                td.style.whiteSpace = "nowrap";
+                const b2 = document.createElement("button");
+                b2.textContent = d.enabled ? "Выкл" : "Вкл";
+                b2.onclick = () => toggleDevice(d.id, !d.enabled);
+                td.appendChild(b2);
+                if (d.source !== "zabbix") {
+                    const b1 = document.createElement("button");
+                    b1.textContent = "Изменить"; b1.onclick = () => editDevice(d.id);
+                    const b3 = document.createElement("button");
+                    b3.textContent = "Удалить"; b3.onclick = () => deleteDevice(d.id, d.name);
+                    td.append(b1, b3);
+                }
+                tr.appendChild(td);
+                devrows.appendChild(tr);
+            }
+        }
+
+        async function syncZabbix() {
+            try {
+                const r = await (await api("/api/devices/sync-zabbix", { method: "POST" })).json();
+                alert(`Синхронизация: добавлено ${r.added}, обновлено ${r.updated}, ` +
+                    `отключено исчезнувших ${r.disabled_gone}, всего в Zabbix ${r.total_zabbix}`);
+                loadDevices();
+            } catch (e) { alert(e.message); }
+        }
+
+        async function toggleGroup(enabled) {
+            if (!f_group.value) { alert("Сначала выберите группу в фильтре"); return; }
+            if (!confirm(`${enabled ? "Включить" : "Выключить"} все устройства группы «${f_group.value}»?`)) return;
+            try {
+                await api("/api/devices/bulk", {
+                    method: "PATCH",
+                    body: JSON.stringify({ group: f_group.value, enabled })
+                });
+                loadDevices();
+            } catch (e) { alert(e.message); }
+        }
+
+        function editDevice(id) {
+            const d = devicesData.find(x => x.id === id);
+            if (!d) return;
+            d_id.value = d.id; d_name.value = d.name; d_type.value = d.type;
+            d_host.value = d.host; d_port.value = d.port; d_user.value = d.username;
+            d_pass.value = ""; d_desc.value = d.description || "";
+            d_hint.textContent = "Редактирование " + d.name + ". Пустой пароль = без изменений.";
+        }
+
+        function resetForm() {
+            d_id.value = ""; d_name.value = ""; d_type.value = "vcenter";
+            d_host.value = ""; d_port.value = 0; d_user.value = "";
+            d_pass.value = ""; d_desc.value = ""; d_hint.textContent = "";
+        }
+
+        async function saveDevice(ev) {
+            ev.preventDefault();
+            const body = {
+                name: d_name.value, type: d_type.value, host: d_host.value,
+                port: parseInt(d_port.value || "0", 10), username: d_user.value,
+                description: d_desc.value
+            };
+            try {
+                if (d_id.value) {
+                    if (d_pass.value) body.password = d_pass.value;
+                    await api(`/api/devices/${d_id.value}`, { method: "PATCH", body: JSON.stringify(body) });
+                } else {
+                    if (!d_pass.value) { alert("При создании устройства пароль обязателен"); return; }
+                    body.password = d_pass.value;
+                    await api("/api/devices", { method: "POST", body: JSON.stringify(body) });
+                }
+                resetForm(); loadDevices();
+            } catch (e) { alert(e.message); }
+        }
+
+        async function toggleDevice(id, enabled) {
+            try {
+                await api(`/api/devices/${id}`, { method: "PATCH", body: JSON.stringify({ enabled }) });
+                loadDevices();
+            } catch (e) { alert(e.message); }
+        }
+
+        async function deleteDevice(id, name) {
+            if (!confirm("Удалить устройство " + name + "?")) return;
+            try {
+                await api(`/api/devices/${id}`, { method: "DELETE" });
+                loadDevices();
+            } catch (e) { alert(e.message); }
+        }
+
+        if (token) init().catch(() => logout());
+    </script>
+</body>
+
+</html>
