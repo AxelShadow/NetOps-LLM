@@ -36,6 +36,15 @@ TOOLS_SCHEMA = [
                                                "description": "IP-адрес или имя"}},
                        "required": ["host"]}}},
     {"type": "function", "function": {
+        "name": "list_devices",
+        "description": "Список всех устройств в инвентаре с их типами и описаниями",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "list_groups",
+        "description": "Список групп устройств и какие устройства входят в каждую группу. "
+                       "Помогает понять структуру инвентаря",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
         "name": "vmware_vms",
         "description": "Список виртуальных машин: питание, IP, CPU, память",
         "parameters": {"type": "object",
@@ -313,12 +322,32 @@ def _vmware(device: Device, name: str, args: dict) -> str:
     return json.dumps(data, ensure_ascii=False, default=str)
 
 
-def execute_tool(name: str, args: dict,
-                 user_id: int | None = None,
+def execute_tool(name: str, args: dict, user_id: int | None = None,
                  conversation_id: int | None = None) -> tuple[str, str]:
     status = "ok"
     try:
-        if name == "ping":
+        if name == "list_devices":
+            with SessionLocal() as db:
+                rows = db.query(Device).filter(Device.enabled.is_(True)).all()
+                result = json.dumps(
+                    [{"name": d.name, "type": d.type.value,
+                      "description": d.description, "group": d.group}
+                     for d in rows],
+                    ensure_ascii=False)
+        elif name == "list_groups":
+            with SessionLocal() as db:
+                devices = db.query(Device).filter(
+                    Device.enabled.is_(True)).all()
+                from collections import defaultdict
+                groups = defaultdict(list)
+                for d in devices:
+                    groups[d.group or "Без группы"].append({
+                        "name": d.name,
+                        "type": d.type.value,
+                        "description": d.description or d.host,
+                    })
+                result = json.dumps(dict(groups), ensure_ascii=False)
+        elif name == "ping":
             result = _ping(args.get("host", ""))
         elif name in VMWARE_TOOLS:
             device_query = (args.get("device") or "").strip()

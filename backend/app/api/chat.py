@@ -46,21 +46,36 @@ SYSTEM_PROMPT = """Ты — внутренний ассистент IT-отде�
    опросит все VMware-устройства инвентаря.
 11. Устройства из Zabbix опрашивай через zabbix_problems / zabbix_items /
     zabbix_history, а не через SNMP или SSH. На вопрос «что сейчас не так /
-    что болит» отвечай начиная с zabbix_problems."""
+    что болит» отвечай начиная с zabbix_problems.
+12. Если пользователь спрашивает про группу устройств или хочет работать
+    с устройствами из определённой группы — сначала вызови list_groups,
+    чтобы увидеть список групп и какие устройства в них входят. Затем
+    вызывай нужные инструменты для конкретных устройств из этой группы."""
 
 
 def build_system_prompt(db: Session) -> str:
-    """Подставляем актуальный инвентарь в промпт, чтобы модель знала
-    имена устройств без лишних вызовов."""
+    """Подставляем актуальный инвентарь в промпт, сгруппированный по группам."""
     devices = db.query(Device).filter(Device.enabled.is_(True)).all()
     if devices:
-        lines = "\n".join(
-            f"- {d.name} ({d.type.value}) — {d.description or d.host}"
-            for d in devices)
-        inventory = (f"\n\nИнвентарь устройств (в параметре device используй эти имена "
-                     f"или 'all' для всех VMware-устройств):\n{lines}")
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for d in devices:
+            group_name = d.group or "Без группы"
+            groups[group_name].append(d)
+
+        lines = []
+        for group_name, devs in sorted(groups.items()):
+            lines.append(f"\n**Группа: {group_name}**")
+            for d in devs:
+                lines.append(
+                    f"  - {d.name} ({d.type.value}) — {d.description or d.host}")
+
+        inventory = (f"\n\nИнвентарь устройств (сгруппирован по группам). "
+                     f"В параметре device используй точные имена устройств или 'all' "
+                     f"для всех VMware-устройств:\n" + "\n".join(lines))
     else:
         inventory = "\n\nИнвентарь устройств пуст."
+
     now = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     return SYSTEM_PROMPT + f"\n\nТекущее время: {now}" + inventory
 
