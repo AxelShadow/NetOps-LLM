@@ -1,18 +1,17 @@
 import logging
-from ..db import SessionLocal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ..db import get_db
+from ..db import get_db, SessionLocal
 from ..models import User, Role
 from ..config import get_settings
 from .ldap_auth import ad_authenticate, split_upn
 from .jwt_utils import create_token
 from .deps import get_current_user, require_admin
 
-router = APIRouter(prefix="/api")
 log = logging.getLogger(__name__)
+router = APIRouter(prefix="/api")
 
 
 class LoginIn(BaseModel):
@@ -21,7 +20,7 @@ class LoginIn(BaseModel):
 
 
 class UserCreate(BaseModel):
-    username: str                    # user@corp.local или просто user
+    username: str
     display_name: str = ""
     role: Role = Role.viewer
 
@@ -53,12 +52,15 @@ def login(creds: LoginIn):
         raise HTTPException(401, "Неверный логин или пароль")
 
     upn = user_data["upn"]
+    username_only = upn.split("@")[0].lower()
 
     with SessionLocal() as db:
-        user = db.query(User).filter(User.username == upn.lower()).first()
+        user = db.query(User).filter(
+            (User.username == upn.lower()) |
+            (User.username == username_only)
+        ).first()
 
         if not user:
-            # Авто-регистрация
             s = get_settings()
             if not s.auto_register_users:
                 raise HTTPException(
@@ -67,7 +69,7 @@ def login(creds: LoginIn):
             user = User(
                 username=upn.lower(),
                 display_name=user_data["display_name"],
-                role=Role.viewer,  # Базовая роль
+                role=Role.viewer,
                 granted_by="auto-register"
             )
             db.add(user)
@@ -75,20 +77,18 @@ def login(creds: LoginIn):
             db.refresh(user)
             log.info("Авто-регистрация: %s (viewer)", upn)
         else:
-            # Обновляем display_name из AD
             user.display_name = user_data["display_name"]
-
-            # Автоматически повышаем роль для bootstrap-админа
             s = get_settings()
-            bootstrap_name = s.bootstrap_admin.split(
-                "@")[0].lower() if s.bootstrap_admin else ""
-            if (user.username == upn.lower() or user.username == bootstrap_name):
+            bootstrap_name = (s.bootstrap_admin.split("@")[0].lower()
+                              if s.bootstrap_admin else "")
+            if (user.username == upn.lower()
+                    or user.username == bootstrap_name):
                 if user.role != Role.admin:
                     user.role = Role.admin
                     user.granted_by = "bootstrap-promotion"
                     log.info("Bootstrap-админ %s повышен до admin", upn)
-
             db.commit()
+
         token = create_token(user.id, user.username, user.role.value)
         return {"token": token}
 
@@ -101,12 +101,14 @@ def me(user: User = Depends(get_current_user)):
 
 # ---------- управление доступом (только админ) ----------
 
+
 @router.get("/users")
 def list_users(db: Session = Depends(get_db), _=Depends(require_admin)):
     users = db.query(User).order_by(User.username).all()
     return [{"id": u.id, "username": u.username, "display_name": u.display_name,
              "role": u.role.value, "is_active": u.is_active,
-             "granted_by": u.granted_by, "granted_at": u.granted_at.isoformat()}
+             "granted_by": u.granted_by,
+             "granted_at": u.granted_at.isoformat() if u.granted_at else None}
             for u in users]
 
 
