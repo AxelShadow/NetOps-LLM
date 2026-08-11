@@ -1,3 +1,4 @@
+import logging
 from ..db import SessionLocal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -11,6 +12,7 @@ from .jwt_utils import create_token
 from .deps import get_current_user, require_admin
 
 router = APIRouter(prefix="/api")
+log = logging.getLogger(__name__)
 
 
 class LoginIn(BaseModel):
@@ -44,7 +46,7 @@ def _normalize(username: str) -> str:
 # ---------- вход ----------
 
 
-@router.post("/login")
+@router.post("/auth/login")
 def login(creds: LoginIn):
     user_data = ad_authenticate(creds.username, creds.password)
     if not user_data:
@@ -72,8 +74,22 @@ def login(creds: LoginIn):
             db.commit()
             db.refresh(user)
             log.info("Авто-регистрация: %s (viewer)", upn)
+        else:
+            # Обновляем display_name из AD
+            user.display_name = user_data["display_name"]
 
-        token = create_token(user.username, user.role.value)
+            # Автоматически повышаем роль для bootstrap-админа
+            s = get_settings()
+            bootstrap_name = s.bootstrap_admin.split(
+                "@")[0].lower() if s.bootstrap_admin else ""
+            if (user.username == upn.lower() or user.username == bootstrap_name):
+                if user.role != Role.admin:
+                    user.role = Role.admin
+                    user.granted_by = "bootstrap-promotion"
+                    log.info("Bootstrap-админ %s повышен до admin", upn)
+
+            db.commit()
+        token = create_token(user.id, user.username, user.role.value)
         return {"token": token}
 
 
