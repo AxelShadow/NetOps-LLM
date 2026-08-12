@@ -32,9 +32,34 @@ def bootstrap_admin():
         log.info("Создан bootstrap-администратор: %s", name)
 
 
+# Колонки messages, добавленные после создания таблицы (alembic нет):
+# имя -> тип для ALTER TABLE ADD COLUMN
+_MESSAGE_MIGRATIONS = [
+    ("tool_calls", "TEXT"),
+    ("tool_call_id", "VARCHAR(64)"),
+    ("name", "VARCHAR(64)"),
+]
+
+
+def _ensure_message_columns():
+    """Добавляет новые колонки в существующую таблицу messages."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    if "messages" not in insp.get_table_names():
+        return
+    existing = {c["name"] for c in insp.get_columns("messages")}
+    with engine.begin() as conn:
+        for col, col_type in _MESSAGE_MIGRATIONS:
+            if col not in existing:
+                conn.execute(text(
+                    f"ALTER TABLE messages ADD COLUMN {col} {col_type}"))
+                log.info("Добавлена колонка messages.%s", col)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(engine)
+    _ensure_message_columns()
     bootstrap_admin()
     yield
 

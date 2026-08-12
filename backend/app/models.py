@@ -47,8 +47,13 @@ class Message(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     conversation_id: Mapped[int] = mapped_column(
         ForeignKey("conversations.id"), index=True)
-    role: Mapped[str] = mapped_column(String(16))   # user | assistant
+    role: Mapped[str] = mapped_column(String(16))   # user | assistant | tool
     content: Mapped[str] = mapped_column(Text)
+    # Для role="assistant" с tool-вызовами: JSON [{id, name, arguments}]
+    tool_calls: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Для role="tool": id вызова и имя инструмента
+    tool_call_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime, default=lambda: dt.datetime.now(dt.UTC))
 

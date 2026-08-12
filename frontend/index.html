@@ -159,6 +159,85 @@
             color: #64748b;
             font-size: 12px
         }
+
+        #chat {
+            max-width: 1400px
+        }
+
+        #convside {
+            width: 250px;
+            min-width: 250px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-right: 12px;
+            overflow-y: auto
+        }
+
+        .conv-item {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 8px 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px
+        }
+
+        .conv-item:hover {
+            background: #f1f5f9
+        }
+
+        .conv-item.active {
+            border-color: #2563eb;
+            background: #eff6ff
+        }
+
+        .conv-item .conv-title {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 13px
+        }
+
+        .conv-item .conv-date {
+            font-size: 11px;
+            color: #64748b;
+            white-space: nowrap
+        }
+
+        .conv-item button {
+            border: none;
+            background: none;
+            cursor: pointer;
+            padding: 0 2px;
+            color: #64748b;
+            font-size: 12px
+        }
+
+        .st-ok {
+            color: #15803d;
+            font-weight: 600
+        }
+
+        .st-error {
+            color: #b91c1c;
+            font-weight: 600
+        }
+
+        .st-denied {
+            color: #b45309;
+            font-weight: 600
+        }
+
+        td pre {
+            max-width: 400px;
+            white-space: pre-wrap;
+            margin: 4px 0;
+            font-size: 12px
+        }
     </style>
 </head>
 
@@ -168,6 +247,7 @@
         <button id="nav_chat" class="active" onclick="showChat()">Чат</button>
         <button id="nav_dev" onclick="showDevices()">Инвентарь</button>
         <button id="nav_users" onclick="showUsers()">Пользователи</button>
+        <button id="nav_audit" onclick="showAudit()">Аудит</button>
         <span id="whoami" style="margin-left:auto"></span>
         <button onclick="logout()" style="background:#64748b">Выход</button>
     </header>
@@ -180,16 +260,21 @@
         <button onclick="doLogin()">Войти</button>
     </div>
 
-    <div id="chat" class="hidden" style="display:flex;flex-direction:column;height:calc(100vh - 56px)">
-        <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
-            <button onclick="newConv()">Новый диалог</button>
-            <select id="model"></select>
-            <span id="status" style="color:#64748b"></span>
+    <div id="chat" class="hidden" style="display:flex;flex-direction:row;height:calc(100vh - 56px)">
+        <div id="convside">
+            <button onclick="newConv()">＋ Новый диалог</button>
+            <div id="convlist" style="display:flex;flex-direction:column;gap:6px"></div>
         </div>
-        <div id="log"></div>
-        <div id="composer">
-            <input id="msg" placeholder="Сообщение..." onkeydown="if(event.key==='Enter')send()">
-            <button onclick="send()">Отправить</button>
+        <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+            <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+                <select id="model"></select>
+                <span id="status" style="color:#64748b"></span>
+            </div>
+            <div id="log"></div>
+            <div id="composer">
+                <input id="msg" placeholder="Сообщение..." onkeydown="if(event.key==='Enter')send()">
+                <button onclick="send()">Отправить</button>
+            </div>
         </div>
     </div>
 
@@ -207,6 +292,25 @@
                 </tr>
             </thead>
             <tbody id="usersRows"></tbody>
+        </table>
+    </div>
+
+    <div id="audit" class="hidden">
+        <h2>Аудит вызовов инструментов</h2>
+        <div style="margin-bottom:10px"><button onclick="loadAudit()">Обновить</button></div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Время</th>
+                    <th>Пользователь</th>
+                    <th>Диалог</th>
+                    <th>Инструмент</th>
+                    <th>Статус</th>
+                    <th>Аргументы</th>
+                    <th>Результат</th>
+                </tr>
+            </thead>
+            <tbody id="auditRows"></tbody>
         </table>
     </div>
 
@@ -301,32 +405,95 @@
             if (myRole !== "admin") {
                 nav_dev.classList.add("hidden");
                 nav_users.classList.add("hidden");
+                nav_audit.classList.add("hidden");
             }
             login.classList.add("hidden");
             chat.classList.remove("hidden");
             const d = await (await api("/api/models")).json();
             model.innerHTML = d.models.map(m => `<option>${m}</option>`).join("");
-            await newConv();
+            const list = await loadConvList();
+            if (list.length) await openConv(list[0].id);
+            else await newConv();
         }
 
-        function showChat() {
-            chat.classList.remove("hidden"); devices.classList.add("hidden"); users.classList.add("hidden");
-            nav_chat.classList.add("active"); nav_dev.classList.remove("active"); nav_users.classList.remove("active");
+        function showScreen(screen) {
+            [chat, devices, users, audit].forEach(s => s.classList.add("hidden"));
+            [nav_chat, nav_dev, nav_users, nav_audit].forEach(b => b.classList.remove("active"));
+            screen.classList.remove("hidden");
         }
-        function showDevices() {
-            devices.classList.remove("hidden"); chat.classList.add("hidden"); users.classList.add("hidden");
-            nav_dev.classList.add("active"); nav_chat.classList.remove("active"); nav_users.classList.remove("active");
-            loadDevices();
+        function showChat() { showScreen(chat); nav_chat.classList.add("active"); }
+        function showDevices() { showScreen(devices); nav_dev.classList.add("active"); loadDevices(); }
+        function showUsers() { showScreen(users); nav_users.classList.add("active"); loadUsers(); }
+        function showAudit() { showScreen(audit); nav_audit.classList.add("active"); loadAudit(); }
+
+        /* ---------- Диалоги ---------- */
+
+        async function loadConvList() {
+            const list = await (await api("/api/conversations")).json();
+            convlist.innerHTML = "";
+            for (const c of list) {
+                const item = document.createElement("div");
+                item.className = "conv-item" + (c.id === convId ? " active" : "");
+                const title = document.createElement("span");
+                title.className = "conv-title";
+                title.textContent = c.title || "Новый диалог";
+                title.onclick = () => openConv(c.id);
+                const date = document.createElement("span");
+                date.className = "conv-date";
+                date.textContent = new Date(c.created_at).toLocaleDateString();
+                const ren = document.createElement("button");
+                ren.textContent = "✎"; ren.title = "Переименовать";
+                ren.onclick = () => renameConv(c.id, c.title);
+                const del = document.createElement("button");
+                del.textContent = "✕"; del.title = "Удалить";
+                del.onclick = () => deleteConv(c.id, c.title);
+                item.append(title, date, ren, del);
+                convlist.appendChild(item);
+            }
+            return list;
         }
-        function showUsers() {
-            users.classList.remove("hidden"); chat.classList.add("hidden"); devices.classList.add("hidden");
-            nav_users.classList.add("active"); nav_chat.classList.remove("active"); nav_dev.classList.remove("active");
-            loadUsers();
+
+        async function openConv(id) {
+            convId = id;
+            const msgs = await (await api(`/api/conversations/${id}/messages`)).json();
+            log.innerHTML = "";
+            for (const m of msgs) {
+                if (m.role === "tool") {
+                    addTool(`🔧 ${m.name || ""}: ${(m.content || "").slice(0, 120)}`);
+                } else {
+                    addMsg(m.role, m.content);
+                }
+            }
+            loadConvList();   // подсветить активный
+        }
+
+        async function renameConv(id, title) {
+            const name = prompt("Название диалога:", title || "");
+            if (name === null) return;
+            try {
+                await api(`/api/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title: name }) });
+                loadConvList();
+            } catch (e) { alert(e.message); }
+        }
+
+        async function deleteConv(id, title) {
+            if (!confirm(`Удалить диалог «${title || "без названия"}»?`)) return;
+            try {
+                await api(`/api/conversations/${id}`, { method: "DELETE" });
+                if (convId === id) {
+                    const list = await loadConvList();
+                    if (list.length) await openConv(list[0].id);
+                    else await newConv();
+                } else {
+                    loadConvList();
+                }
+            } catch (e) { alert(e.message); }
         }
 
         async function newConv() {
             convId = (await (await api("/api/conversations", { method: "POST" })).json()).id;
             log.innerHTML = "";
+            loadConvList();
         }
 
         function addMsg(role, text) {
@@ -373,6 +540,38 @@
                     }
                 }
             }
+            loadConvList();   // после первого сообщения появился title
+        }
+
+        /* ---------- Аудит ---------- */
+
+        async function loadAudit() {
+            try {
+                const rows = await (await api("/api/audit?limit=200")).json();
+                auditRows.innerHTML = "";
+                for (const r of rows) {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `<td>${new Date(r.created_at).toLocaleString()}</td>
+        <td>${r.username}</td>
+        <td>${r.conversation_id ?? ""}</td>
+        <td>${r.tool}</td>
+        <td class="st-${r.status}">${r.status}</td>`;
+                    const tdArgs = document.createElement("td");
+                    const detA = document.createElement("details");
+                    const preA = document.createElement("pre");
+                    preA.textContent = r.arguments || "";
+                    detA.append("показать", preA);
+                    tdArgs.appendChild(detA);
+                    const tdRes = document.createElement("td");
+                    const detR = document.createElement("details");
+                    const preR = document.createElement("pre");
+                    preR.textContent = r.result || "";
+                    detR.append("показать", preR);
+                    tdRes.appendChild(detR);
+                    tr.append(tdArgs, tdRes);
+                    auditRows.appendChild(tr);
+                }
+            } catch (e) { alert("Ошибка загрузки аудита: " + e.message); }
         }
 
         /* ---------- Пользователи ---------- */

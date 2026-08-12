@@ -8,8 +8,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..db import get_db, SessionLocal
-from ..models import User, Conversation, Message, Device
-from ..auth.deps import get_current_user
+from ..models import User, Conversation, Message, Device, AuditLog
+from ..auth.deps import get_current_user, require_admin
 from ..llm.client import llm
 from ..config import get_settings
 from ..agent.tools import TOOLS_SCHEMA, execute_tool
@@ -85,6 +85,10 @@ class MessageIn(BaseModel):
     model: str | None = None
 
 
+class TitleIn(BaseModel):
+    title: str
+
+
 def _get_owned(db: Session, cid: int, user: User) -> Conversation:
     conv = db.get(Conversation, cid)
     if not conv or conv.user_id != user.id:
@@ -94,6 +98,29 @@ def _get_owned(db: Session, cid: int, user: User) -> Conversation:
 
 def sse(obj: dict) -> str:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+def _to_api_message(m: Message) -> dict:
+    """Сообщение из БД -> сообщение для LLM API."""
+    if m.role == "assistant" and m.tool_calls:
+        try:
+            calls = json.loads(m.tool_calls)
+        except (ValueError, TypeError):
+            calls = []
+        if calls:
+            return {
+                "role": "assistant",
+                "content": m.content or "",
+                "tool_calls": [
+                    {"id": c["id"], "type": "function",
+                     "function": {"name": c["name"],
+                                  "arguments": c["arguments"]}}
+                    for c in calls],
+            }
+    if m.role == "tool":
+        return {"role": "tool", "tool_call_id": m.tool_call_id or "",
+                "content": m.content}
+    return {"role": m.role, "content": m.content}
 
 
 async def _stream_turn(messages, model, queue):
@@ -155,8 +182,48 @@ def list_conversations(user: User = Depends(get_current_user),
 def get_messages(cid: int, user: User = Depends(get_current_user),
                  db: Session = Depends(get_db)):
     conv = _get_owned(db, cid, user)
-    return [{"role": m.role, "content": m.content,
+    return [{"role": m.role, "content": m.content, "name": m.name,
              "created_at": m.created_at.isoformat()} for m in conv.messages]
+
+
+@router.patch("/conversations/{cid}")
+def rename_conversation(cid: int, data: TitleIn,
+                        user: User = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
+    conv = _get_owned(db, cid, user)
+    title = data.title.strip()
+    if not title:
+        raise HTTPException(400, "Название не может быть пустым")
+    conv.title = title[:200]
+    db.commit()
+    return {"id": conv.id, "title": conv.title,
+            "created_at": conv.created_at.isoformat()}
+
+
+@router.delete("/conversations/{cid}")
+def delete_conversation(cid: int, user: User = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
+    conv = _get_owned(db, cid, user)
+    db.delete(conv)   # каскад delete-orphan удалит сообщения
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/audit")
+def get_audit(limit: int = 100, _user: User = Depends(require_admin),
+              db: Session = Depends(get_db)):
+    limit = min(max(limit, 1), 500)
+    rows = (db.query(AuditLog, User.username)
+            .outerjoin(User, AuditLog.user_id == User.id)
+            .order_by(AuditLog.id.desc()).limit(limit).all())
+    return [{"id": r.id,
+             "created_at": r.created_at.isoformat(),
+             "username": username or "—",
+             "conversation_id": r.conversation_id,
+             "tool": r.tool,
+             "arguments": r.arguments,
+             "result": (r.result or "")[:800],
+             "status": r.status} for r, username in rows]
 
 
 @router.post("/conversations/{cid}/messages")
@@ -173,10 +240,14 @@ async def send_message(cid: int, data: MessageIn,
         conv.title = data.content[:60]
     db.commit()
 
-    history = [{"role": m.role, "content": m.content}
-               for m in (db.query(Message).filter_by(conversation_id=cid)
-                         .order_by(Message.id.desc())
-                         .limit(s.history_messages).all())][::-1]
+    raw = (db.query(Message).filter_by(conversation_id=cid)
+           .order_by(Message.id.desc())
+           .limit(s.history_messages).all())[::-1]
+    history = [_to_api_message(m) for m in raw]
+    # Обрезанная голова может начинаться с tool/assistant с tool_calls —
+    # такой контекст невалиден для LLM API. Срезаем до первого user.
+    while history and history[0]["role"] != "user":
+        history.pop(0)
 
     try:
         model = data.model or await llm.pick_model()
@@ -212,19 +283,60 @@ async def send_message(cid: int, data: MessageIn,
                                       "arguments": c["arguments"]}}
                         for c in tool_calls],
                 })
-                for c in tool_calls:
+
+                # Инструменты выполняются параллельно; события стримятся
+                # по мере завершения каждого вызова.
+                exec_queue: asyncio.Queue = asyncio.Queue()
+                tool_msgs: list[dict | None] = [None] * len(tool_calls)
+
+                async def _exec_call(i: int, c: dict):
                     try:
-                        args = json.loads(c["arguments"] or "{}")
-                    except json.JSONDecodeError:
-                        args = {}
-                    yield sse({"tool": c["name"], "args": args})
-                    result, status = await asyncio.to_thread(
-                        execute_tool, c["name"], args, user.id, cid)
-                    yield sse({"tool_result": {"name": c["name"],
-                                               "ok": status == "ok",
-                                               "preview": result[:200]}})
-                    messages.append({"role": "tool", "tool_call_id": c["id"],
-                                     "content": result})
+                        try:
+                            args = json.loads(c["arguments"] or "{}")
+                        except json.JSONDecodeError:
+                            args = {}
+                        await exec_queue.put({"tool": c["name"], "args": args})
+                        result, status = await asyncio.to_thread(
+                            execute_tool, c["name"], args, user.id, cid)
+                        await exec_queue.put({"tool_result": {
+                            "name": c["name"], "ok": status == "ok",
+                            "preview": result[:200]}})
+                        tool_msgs[i] = {"role": "tool",
+                                        "tool_call_id": c["id"],
+                                        "content": result}
+                    finally:
+                        await exec_queue.put(None)
+
+                tasks = [asyncio.create_task(_exec_call(i, c))
+                         for i, c in enumerate(tool_calls)]
+                done_count = 0
+                while done_count < len(tasks):
+                    ev = await exec_queue.get()
+                    if ev is None:
+                        done_count += 1
+                        continue
+                    yield sse(ev)
+                await asyncio.gather(*tasks)   # прокинуть исключение, если было
+                messages.extend(tool_msgs)
+
+                # Сохраняем шаг в БД целиком: вызовы assistant и все
+                # результаты. Иначе обрезанная история будет невалидна
+                # для LLM API.
+                try:
+                    with SessionLocal() as db2:
+                        db2.add(Message(
+                            conversation_id=cid, role="assistant",
+                            content=content or "",
+                            tool_calls=json.dumps(tool_calls,
+                                                  ensure_ascii=False)))
+                        for i, c in enumerate(tool_calls):
+                            db2.add(Message(
+                                conversation_id=cid, role="tool",
+                                content=tool_msgs[i]["content"],
+                                tool_call_id=c["id"], name=c["name"]))
+                        db2.commit()
+                except Exception:
+                    log.exception("Не удалось сохранить шаг агента в БД")
             else:
                 yield sse({"delta": "\n\n(Остановлено: лимит шагов агента)"})
         except Exception:
