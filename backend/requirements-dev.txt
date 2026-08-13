@@ -6,3 +6,4 @@ ldap3
 PyJWT
 openai
 pyvmomi
+cachetools==5.4.0

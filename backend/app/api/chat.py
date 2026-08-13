@@ -50,7 +50,10 @@ SYSTEM_PROMPT = """Ты — внутренний ассистент IT-отде�
 12. Если пользователь спрашивает про группу устройств или хочет работать
     с устройствами из определённой группы — сначала вызови list_groups,
     чтобы увидеть список групп и какие устройства в них входят. Затем
-    вызывай нужные инструменты для конкретных устройств из этой группы."""
+    вызывай нужные инструменты для конкретных устройств из этой группы.
+13. На вопросы «что болит», «есть ли проблемы», «состояние инфраструктуры» вызывай get_infrastructure_health. 
+    Этот инструмент автоматически опрашивает Zabbix, VMware-сенсоры и (опционально) доступность устройств. 
+    НЕ вызывай отдельно zabbix_problems — используй get_infrastructure_health для полного обзора."""
 
 
 def build_system_prompt(db: Session) -> str:
@@ -297,7 +300,7 @@ async def send_message(cid: int, data: MessageIn,
                             args = {}
                         await exec_queue.put({"tool": c["name"], "args": args})
                         result, status = await asyncio.to_thread(
-                            execute_tool, c["name"], args, user.id, cid)
+                            execute_tool, c["name"], args, user.id, cid, user.role.value)
                         await exec_queue.put({"tool_result": {
                             "name": c["name"], "ok": status == "ok",
                             "preview": result[:200]}})
@@ -316,7 +319,8 @@ async def send_message(cid: int, data: MessageIn,
                         done_count += 1
                         continue
                     yield sse(ev)
-                await asyncio.gather(*tasks)   # прокинуть исключение, если было
+                # прокинуть исключение, если было
+                await asyncio.gather(*tasks)
                 messages.extend(tool_msgs)
 
                 # Сохраняем шаг в БД целиком: вызовы assistant и все
