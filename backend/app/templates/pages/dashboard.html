@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — NetOps Admin{% endblock %}
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold">Dashboard</h1>
+    <p class="text-sm text-slate-500">Обзор системы и быстрые действия</p>
+</div>
+
+<div class="grid gap-4 md:grid-cols-3 mb-6">
+    <div class="bg-white rounded-xl shadow-sm p-5">
+        <p class="text-xs uppercase tracking-wide text-slate-400 font-semibold">Пользователь</p>
+        <p class="text-lg font-semibold mt-1">{{ user.display_name or user.username }}</p>
+        <p class="text-sm text-slate-500">{{ user.username }}</p>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm p-5">
+        <p class="text-xs uppercase tracking-wide text-slate-400 font-semibold">Роль</p>
+        <p class="text-lg font-semibold mt-1">
+            <span class="px-2 py-1 rounded bg-sky-100 text-sky-800 text-sm uppercase tracking-wide">{{ user.role.value }}</span>
+        </p>
+        <p class="text-sm text-slate-500 mt-1">
+            {% if user.role.value == 'admin' %}Полный доступ{% elif user.role.value == 'engineer' %}Инвентарь и диалоги{% else %}Только чат{% endif %}
+        </p>
+    </div>
+    {% if is_dev %}
+    <div class="bg-white rounded-xl shadow-sm p-5">
+        <p class="text-xs uppercase tracking-wide text-slate-400 font-semibold">Мок-режим</p>
+        <p class="text-lg font-semibold mt-1">
+            {% if mock_mode %}
+            <span class="px-2 py-1 rounded bg-amber-100 text-amber-800 text-sm">включён</span>
+            {% else %}
+            <span class="px-2 py-1 rounded bg-emerald-100 text-emerald-800 text-sm">выключен</span>
+            {% endif %}
+        </p>
+        <p class="text-xs text-slate-400 mt-1">NETOPS_MOCK_MODE (dev)</p>
+    </div>
+    {% endif %}
+</div>
+
+<h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Разделы</h2>
+<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 mb-6">
+    {% for label, href in nav %}
+    <a href="{{ href }}"
+       class="bg-white rounded-xl shadow-sm p-5 hover:shadow-md hover:border-sky-300 border border-transparent transition block">
+        <span class="font-medium">{{ label }}</span>
+        <span class="block text-xs text-slate-400 mt-1">{{ href }}</span>
+    </a>
+    {% endfor %}
+</div>
+
+<h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Быстрые действия</h2>
+<div class="flex flex-wrap gap-3">
+    <a href="/chat" class="px-4 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium transition">
+        Открыть чат
+    </a>
+    {% if user.role.value in ('admin', 'engineer') %}
+    <a href="/admin/inventory" class="px-4 py-2 rounded-md bg-white hover:bg-slate-50 border border-slate-300 text-sm font-medium transition">
+        Перейти в инвентарь
+    </a>
+    {% endif %}
+</div>
+{% endblock %}

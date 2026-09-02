@@ -1,0 +1,11 @@
+{# Алерты-уведомления. Использование: flash=['Текст', 'Тип'] либо flash=None #}
+{% if flash %}
+    {% set text = flash[0] %}
+    {% set kind = flash[1] if flash|length > 1 else 'info' %}
+    <div class="mb-4 rounded-md border px-4 py-3 text-sm
+        {% if kind == 'error' %}bg-red-50 border-red-300 text-red-800
+        {% elif kind == 'success' %}bg-emerald-50 border-emerald-300 text-emerald-800
+        {% else %}bg-sky-50 border-sky-300 text-sky-800{% endif %}">
+        {{ text }}
+    </div>
+{% endif %}

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}NetOps Admin{% endblock %}</title>
+    {# Tailwind через CDN — для разработки. TODO(Фаза 13): собрать локальный
+       css через Tailwind CLI и заменить на /admin/static/css/tailwind.css #}
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/admin/static/js/htmx.min.js"></script>
+    {% block head %}{% endblock %}
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col">
+<header class="bg-slate-900 text-slate-100 shadow">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-6 flex-wrap">
+        <a href="/admin/" class="font-bold text-lg tracking-tight">NetOps<span class="text-sky-400">Admin</span></a>
+        <nav class="flex gap-1 flex-wrap">
+            {% for label, href in nav %}
+            <a href="{{ href }}"
+               class="px-3 py-1.5 rounded-md text-sm font-medium transition
+                      {% if href == request.url.path %}bg-sky-600 text-white{% else %}text-slate-300 hover:bg-slate-700 hover:text-white{% endif %}">
+                {{ label }}
+            </a>
+            {% endfor %}
+        </nav>
+        <div class="ml-auto flex items-center gap-3">
+            <span class="text-sm text-slate-300">
+                {{ user.display_name or user.username }}
+                <span class="ml-1 px-2 py-0.5 rounded bg-slate-700 text-xs uppercase tracking-wide">{{ user.role.value }}</span>
+            </span>
+            <form method="post" action="/admin/logout">
+                <button type="submit"
+                        class="text-sm px-3 py-1.5 rounded-md bg-slate-700 hover:bg-red-600 transition font-medium">
+                    Выход
+                </button>
+            </form>
+        </div>
+    </div>
+</header>
+<main class="max-w-6xl w-full mx-auto px-4 py-6 flex-1">
+    {% include "components/flash.html" %}
+    {% block content %}{% endblock %}
+</main>
+<footer class="text-center text-xs text-slate-400 py-4">
+    NetOps LLM — серверная админка (Фаза 2, каркас)
+</footer>
+</body>
+</html>

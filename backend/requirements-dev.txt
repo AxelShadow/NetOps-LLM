@@ -7,3 +7,4 @@ PyJWT
 openai
 pyvmomi
 cachetools==5.4.0
+jinja2

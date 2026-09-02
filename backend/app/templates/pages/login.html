@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Вход — NetOps Admin</title>
+    {# Tailwind CDN для разработки. TODO(Фаза 13): локальная сборка #}
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen flex items-center justify-center">
+<div class="w-full max-w-sm">
+    <div class="bg-white rounded-xl shadow-md p-8">
+        <h1 class="text-2xl font-bold mb-1">NetOps<span class="text-sky-500">Admin</span></h1>
+        <p class="text-sm text-slate-500 mb-6">Вход в серверную админку</p>
+        {% if error %}
+        <div class="mb-4 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+            {{ error }}
+        </div>
+        {% endif %}
+        <form method="post" action="/admin/login" class="space-y-4">
+            <div>
+                <label for="username" class="block text-sm font-medium mb-1">Логин (UPN)</label>
+                <input id="username" name="username" type="text" required autofocus
+                       placeholder="user@corp.local"
+                       class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500">
+            </div>
+            <div>
+                <label for="password" class="block text-sm font-medium mb-1">Пароль</label>
+                <input id="password" name="password" type="password" required
+                       class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500">
+            </div>
+            <button type="submit"
+                    class="w-full rounded-md bg-sky-600 hover:bg-sky-700 text-white font-medium py-2 text-sm transition">
+                Войти
+            </button>
+        </form>
+    </div>
+    <p class="text-center text-xs text-slate-400 mt-4">NetOps LLM</p>
+</div>
+</body>
+</html>

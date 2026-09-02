@@ -3,8 +3,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .api.devices import router as devices_router
+from .ui.router import router as ui_router
 from .db import Base, engine, SessionLocal
 from .models import User, Role
 from .auth.routes import router as auth_router
@@ -70,7 +72,34 @@ app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(devices_router)
 app.include_router(internal_router)
+app.include_router(ui_router)
 
+from fastapi.responses import JSONResponse  # noqa: E402
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _admin_http_exception(request, exc: StarletteHTTPException):
+    """Для страниц /admin/*: 401 — редирект на логин, 403 — HTML-страница.
+
+    API-роуты (/api/*, /internal/*) продолжают получать дефолтный JSON-ответ.
+    """
+    if request.url.path.startswith("/admin"):
+        if exc.status_code == 401:
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse("/admin/login", status_code=303)
+        if exc.status_code == 403:
+            from .ui.router import templates
+            return templates.TemplateResponse(
+                request, "pages/403.html", {"request": request},
+                status_code=403)
+    # Дефолтное поведение (как без обработчика): JSON с деталью
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code,
+                        headers=exc.headers)
+
+
+_ADMIN_STATIC = Path(__file__).resolve().parent / "static"
+app.mount("/admin/static", StaticFiles(directory=str(_ADMIN_STATIC)),
+          name="admin_static")
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 if FRONTEND_DIR.exists():
