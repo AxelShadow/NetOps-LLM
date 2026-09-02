@@ -14,6 +14,10 @@ from ..devices.zabbix import ZabbixClient
 from ..db import SessionLocal
 from ..models import Device, DeviceType, AuditLog
 from ..devices.vmware import get_adapter, drop_adapter
+from ..config import get_settings
+from .mock import MOCK_TOOLS
+
+settings = get_settings()
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +49,13 @@ def register_tool(
             _caches[name] = TTLCache(maxsize=100, ttl=cache_ttl)
 
         def wrapper(**kwargs):
+            # Мок-режим: сетевые инструменты отдают фейковые данные
+            # без обращения к vCenter/Zabbix/ICMP (см. app/agent/mock.py).
+            if settings.mock_mode:
+                mock_fn = MOCK_TOOLS.get(name)
+                if mock_fn is not None:
+                    return mock_fn(kwargs)
+
             # Проверка кэша
             if cache_ttl > 0:
                 try:
@@ -655,6 +666,7 @@ def get_infrastructure_health():
     # Определяем VMware-устройства для опроса.
     # Логика: если есть vCenter, опрашиваем его (он отдаст данные по всем хостам).
     # Standalone ESXi опрашиваем отдельно только если они НЕ под vCenter.
+
     vmware_devices = [d for d in all_devices if d.type in (
         DeviceType.vcenter, DeviceType.esxi)]
 
@@ -670,6 +682,19 @@ def get_infrastructure_health():
         # (в вашем случае vmh08 — standalone, его нужно опросить)
         standalone_esxi = [d for d in all_devices if d.type == DeviceType.esxi]
         vmware_devices.extend(standalone_esxi)
+    # Прозрачность: показываем модели что опрашиваем
+    report["polled_devices"] = [
+        {"name": d.name, "type": d.type.value}
+        for d in vmware_devices
+    ]
+    # Если в инвентаре есть VMware-устройства, которые НЕ попали в опрос:
+    all_vmware_names = {d.name for d in all_devices if d.type in (
+        DeviceType.vcenter, DeviceType.esxi)}
+    polled_names = {d.name for d in vmware_devices}
+    skipped = all_vmware_names - polled_names
+    if skipped:
+        report["skipped_devices"] = list(skipped)
+        report["inventory_note"] += f" Пропущены (под управлением vCenter): {', '.join(skipped)}."
 
     # ============================================================
     # 2. Zabbix: ОДИН вызов, без device (все алерты инфраструктуры)

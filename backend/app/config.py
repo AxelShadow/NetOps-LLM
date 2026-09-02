@@ -29,6 +29,8 @@ class Settings(BaseSettings):
 
     dev_mode: bool = False
 
+    mock_mode: bool = False  # NETOPS_MOCK_MODE: фейковые данные без сети
+
 
 @lru_cache
 def get_settings() -> Settings:
