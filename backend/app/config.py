@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,7 +30,10 @@ class Settings(BaseSettings):
 
     dev_mode: bool = False
 
-    mock_mode: bool = False  # NETOPS_MOCK_MODE: фейковые данные без сети
+    mock_mode: bool = False
+    # Сервисный токен для /internal/* (пусто = внутренние маршруты выключены)
+    internal_service_token: str = Field(default="",
+                                        env="NETOPS_INTERNAL_SERVICE_TOKEN")
 
 
 @lru_cache

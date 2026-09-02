@@ -9,6 +9,7 @@ from .db import Base, engine, SessionLocal
 from .models import User, Role
 from .auth.routes import router as auth_router
 from .api.chat import router as chat_router
+from .api.internal import router as internal_router
 from .auth.ldap_auth import split_upn
 from .config import get_settings
 
@@ -68,6 +69,7 @@ app = FastAPI(title="NetOps LLM", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(devices_router)
+app.include_router(internal_router)
 
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"

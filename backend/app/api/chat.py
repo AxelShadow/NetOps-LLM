@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import datetime as dt
+from collections.abc import AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -229,131 +230,150 @@ def get_audit(limit: int = 100, _user: User = Depends(require_admin),
              "status": r.status} for r, username in rows]
 
 
+async def run_agent_cycle(user: User, conversation: Conversation,
+                          message_text: str,
+                          model: str | None = None) -> AsyncGenerator[str, None]:
+    """Агентский цикл диалога: сохраняет сообщение пользователя, гоняет
+    цикл LLM+инструментов, стримит SSE-кадры (delta/tool/tool_result/error)
+    и завершает кадром [DONE]. Используется HTTP-эндпоинтом /api/.../messages
+    и внутренним маршрутом /internal/chat/stream."""
+    cid = conversation.id
+    s = get_settings()
+
+    first = SessionLocal()  # отдельная сессия: генератор живёт дольше запроса
+    try:
+        first_msg = first.query(Message).filter_by(
+            conversation_id=cid).count() == 0
+        first.add(Message(conversation_id=cid, role="user",
+                          content=message_text))
+        if first_msg:
+            conv = first.get(Conversation, cid)
+            conv.title = message_text[:60]
+        first.commit()
+    finally:
+        first.close()
+
+    with SessionLocal() as db0:
+        raw = (db0.query(Message).filter_by(conversation_id=cid)
+               .order_by(Message.id.desc())
+               .limit(s.history_messages).all())[::-1]
+        history = [_to_api_message(m) for m in raw]
+        system_prompt = build_system_prompt(db0)
+    while history and history[0]["role"] != "user":
+        history.pop(0)
+
+    try:
+        model = model or await llm.pick_model()
+    except Exception:
+        yield sse({"error": "Сервер LLM недоступен, попробуйте позже"})
+        yield "data: [DONE]\n\n"
+        return
+
+    messages = [{"role": "system", "content": system_prompt}, *history]
+    final_text = ""
+    try:
+        for _step in range(MAX_AGENT_STEPS):
+            queue = asyncio.Queue()
+            task = asyncio.create_task(
+                _stream_turn(messages, model, queue))
+            while True:
+                ev = await queue.get()
+                if ev is None:
+                    break
+                yield sse(ev)
+            content, tool_calls = await task
+
+            if not tool_calls:          # финальный ответ
+                final_text = content
+                break
+
+            messages.append({
+                "role": "assistant",
+                "content": content or None,
+                "tool_calls": [
+                    {"id": c["id"], "type": "function",
+                     "function": {"name": c["name"],
+                                  "arguments": c["arguments"]}}
+                    for c in tool_calls],
+            })
+
+            # Инструменты выполняются параллельно; события стримятся
+            # по мере завершения каждого вызова.
+            exec_queue: asyncio.Queue = asyncio.Queue()
+            tool_msgs: list[dict | None] = [None] * len(tool_calls)
+
+            async def _exec_call(i: int, c: dict):
+                try:
+                    try:
+                        args = json.loads(c["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    await exec_queue.put({"tool": c["name"], "args": args})
+                    result, status = await asyncio.to_thread(
+                        execute_tool, c["name"], args, user.id, cid,
+                        user.role.value)
+                    await exec_queue.put({"tool_result": {
+                        "name": c["name"], "ok": status == "ok",
+                        "preview": result[:200]}})
+                    tool_msgs[i] = {"role": "tool",
+                                    "tool_call_id": c["id"],
+                                    "content": result}
+                finally:
+                    await exec_queue.put(None)
+
+            tasks = [asyncio.create_task(_exec_call(i, c))
+                     for i, c in enumerate(tool_calls)]
+            done_count = 0
+            while done_count < len(tasks):
+                ev = await exec_queue.get()
+                if ev is None:
+                    done_count += 1
+                    continue
+                yield sse(ev)
+            # прокинуть исключение, если было
+            await asyncio.gather(*tasks)
+            messages.extend(tool_msgs)
+
+            # Сохраняем шаг в БД целиком: вызовы assistant и все
+            # результаты. Иначе обрезанная история будет невалидна
+            # для LLM API.
+            try:
+                with SessionLocal() as db2:
+                    db2.add(Message(
+                        conversation_id=cid, role="assistant",
+                        content=content or "",
+                        tool_calls=json.dumps(tool_calls,
+                                              ensure_ascii=False)))
+                    for i, c in enumerate(tool_calls):
+                        db2.add(Message(
+                            conversation_id=cid, role="tool",
+                            content=tool_msgs[i]["content"],
+                            tool_call_id=c["id"], name=c["name"]))
+                    db2.commit()
+            except Exception:
+                log.exception("Не удалось сохранить шаг агента в БД")
+        else:
+            yield sse({"delta": "\n\n(Остановлено: лимит шагов агента)"})
+    except Exception:
+        log.exception("Ошибка агентского цикла")
+        yield sse({"error": "Сервер LLM недоступен, попробуйте позже"})
+    finally:
+        if final_text:
+            with SessionLocal() as db2:
+                db2.add(Message(conversation_id=cid, role="assistant",
+                                content=final_text))
+                db2.commit()
+        yield "data: [DONE]\n\n"
+
+
 @router.post("/conversations/{cid}/messages")
 async def send_message(cid: int, data: MessageIn,
                        user: User = Depends(get_current_user),
                        db: Session = Depends(get_db)):
     _get_owned(db, cid, user)
-    s = get_settings()
-
-    first = db.query(Message).filter_by(conversation_id=cid).count() == 0
-    db.add(Message(conversation_id=cid, role="user", content=data.content))
-    if first:
-        conv = db.get(Conversation, cid)
-        conv.title = data.content[:60]
-    db.commit()
-
-    raw = (db.query(Message).filter_by(conversation_id=cid)
-           .order_by(Message.id.desc())
-           .limit(s.history_messages).all())[::-1]
-    history = [_to_api_message(m) for m in raw]
-    # Обрезанная голова может начинаться с tool/assistant с tool_calls —
-    # такой контекст невалиден для LLM API. Срезаем до первого user.
-    while history and history[0]["role"] != "user":
-        history.pop(0)
-
-    try:
-        model = data.model or await llm.pick_model()
-    except Exception:
-        raise HTTPException(503, "Сервер LLM недоступен")
-    system_prompt = build_system_prompt(db)
-
-    async def generate():
-        messages = [{"role": "system", "content": system_prompt}, *history]
-        final_text = ""
-        try:
-            for _step in range(MAX_AGENT_STEPS):
-                queue = asyncio.Queue()
-                task = asyncio.create_task(
-                    _stream_turn(messages, model, queue))
-                while True:
-                    ev = await queue.get()
-                    if ev is None:
-                        break
-                    yield sse(ev)
-                content, tool_calls = await task
-
-                if not tool_calls:          # финальный ответ
-                    final_text = content
-                    break
-
-                messages.append({
-                    "role": "assistant",
-                    "content": content or None,
-                    "tool_calls": [
-                        {"id": c["id"], "type": "function",
-                         "function": {"name": c["name"],
-                                      "arguments": c["arguments"]}}
-                        for c in tool_calls],
-                })
-
-                # Инструменты выполняются параллельно; события стримятся
-                # по мере завершения каждого вызова.
-                exec_queue: asyncio.Queue = asyncio.Queue()
-                tool_msgs: list[dict | None] = [None] * len(tool_calls)
-
-                async def _exec_call(i: int, c: dict):
-                    try:
-                        try:
-                            args = json.loads(c["arguments"] or "{}")
-                        except json.JSONDecodeError:
-                            args = {}
-                        await exec_queue.put({"tool": c["name"], "args": args})
-                        result, status = await asyncio.to_thread(
-                            execute_tool, c["name"], args, user.id, cid, user.role.value)
-                        await exec_queue.put({"tool_result": {
-                            "name": c["name"], "ok": status == "ok",
-                            "preview": result[:200]}})
-                        tool_msgs[i] = {"role": "tool",
-                                        "tool_call_id": c["id"],
-                                        "content": result}
-                    finally:
-                        await exec_queue.put(None)
-
-                tasks = [asyncio.create_task(_exec_call(i, c))
-                         for i, c in enumerate(tool_calls)]
-                done_count = 0
-                while done_count < len(tasks):
-                    ev = await exec_queue.get()
-                    if ev is None:
-                        done_count += 1
-                        continue
-                    yield sse(ev)
-                # прокинуть исключение, если было
-                await asyncio.gather(*tasks)
-                messages.extend(tool_msgs)
-
-                # Сохраняем шаг в БД целиком: вызовы assistant и все
-                # результаты. Иначе обрезанная история будет невалидна
-                # для LLM API.
-                try:
-                    with SessionLocal() as db2:
-                        db2.add(Message(
-                            conversation_id=cid, role="assistant",
-                            content=content or "",
-                            tool_calls=json.dumps(tool_calls,
-                                                  ensure_ascii=False)))
-                        for i, c in enumerate(tool_calls):
-                            db2.add(Message(
-                                conversation_id=cid, role="tool",
-                                content=tool_msgs[i]["content"],
-                                tool_call_id=c["id"], name=c["name"]))
-                        db2.commit()
-                except Exception:
-                    log.exception("Не удалось сохранить шаг агента в БД")
-            else:
-                yield sse({"delta": "\n\n(Остановлено: лимит шагов агента)"})
-        except Exception:
-            log.exception("Ошибка агентского цикла")
-            yield sse({"error": "Сервер LLM недоступен, попробуйте позже"})
-        finally:
-            if final_text:
-                with SessionLocal() as db2:
-                    db2.add(Message(conversation_id=cid, role="assistant",
-                                    content=final_text))
-                    db2.commit()
-            yield "data: [DONE]\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
-                                      "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        run_agent_cycle(user, db.get(Conversation, cid), data.content,
+                        data.model),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache",
+                 "X-Accel-Buffering": "no"})
