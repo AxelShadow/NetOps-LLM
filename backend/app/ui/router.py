@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db import SessionLocal, get_db
-from ..models import AuditLog, Role, User
+from ..models import AuditLog, Device, DeviceType, Role, User
 from ..auth.ldap_auth import ad_authenticate
 from ..auth.jwt_utils import create_token
 from .deps import COOKIE_NAME, load_user_from_token, get_current_user_page, \
@@ -298,3 +298,226 @@ def audit_details(request: Request,
 # 401/403 обрабатываются на уровне приложения (main.py): FastAPI не
 # позволяет вешать exception_handler на APIRouter. Для /admin/* 401
 # превращается в редирект на логин, 403 — в HTML-страницу (не JSON).
+
+
+# --- Инвентарь: HTMX-фрагменты и CRUD (Фаза 3 миграции) ---------------------
+
+_INV_PAGE_SIZE = 20
+
+# Показ устройств в UI: пароль никогда не уходит в HTML.
+_INV_DEVICE_TYPES = [t.value for t in DeviceType]
+
+
+def _inv_query(db: Session, q_f: str | None, type_f: str | None,
+               source_f: str | None, status_f: str | None, group_f: str | None):
+    """Базовый запрос устройств с фильтрами, сортировка по имени."""
+    query = db.query(Device).order_by(Device.name)
+    if q_f:
+        query = query.filter(Device.name.ilike(f"%{q_f}%"))
+    if type_f:
+        query = query.filter(Device.type == type_f)
+    if source_f:
+        query = query.filter(Device.source == source_f)
+    if status_f:
+        # "on" = только включённые, "off" = только выключенные
+        query = query.filter(Device.enabled == (status_f == "on"))
+    if group_f:
+        query = query.filter(Device.group.ilike(f"%{group_f}%"))
+    return query
+
+
+def _inv_rows(request: Request, user: User, db: Session, flash: str | None = None,
+              **filters):
+    """Страница таблицы инвентаря: query -> данные -> шаблон components/inventory/table.html."""
+    page = filters.pop("page", 1)
+    rows = _inv_query(db, **filters)
+    total = rows.count()
+    pages = max(1, (total + _INV_PAGE_SIZE - 1) // _INV_PAGE_SIZE)
+    page = min(max(1, page), pages)
+    offset = (page - 1) * _INV_PAGE_SIZE
+    devices = rows.offset(offset).limit(_INV_PAGE_SIZE).all()
+    # Текущие фильтры без page — для ссылок пагинации (как в audit)
+    keep = {k: v for k, v in request.query_params.items()
+            if k != "page" and v}
+    return templates.TemplateResponse(
+        request, "components/inventory/table.html",
+        _ctx(request, user,
+             devices=devices, total=total, page=page, pages=pages,
+             filters=keep, device_types=_INV_DEVICE_TYPES, flash=flash))
+
+
+def _inv_form(request: Request, user: User, device: Device | None,
+              error: str | None = None, status_code: int = 200):
+    """Фрагмент формы добавления/редактирования (модалка)."""
+    action = "/admin/inventory" if device is None \
+        else f"/admin/inventory/{device.id}"
+    method = "post" if device is None else "put"
+    return templates.TemplateResponse(
+        request, "components/inventory/form.html",
+        _ctx(request, user, device=device, action=action, method=method,
+             error=error, device_types=_INV_DEVICE_TYPES),
+        status_code=status_code)
+
+
+@router.get("/inventory/partial/table")
+def inventory_table(request: Request,
+                    db: Session = Depends(get_db),
+                    user: User = Depends(require_roles_page(
+                        Role.admin, Role.engineer)),
+                    page: int = Query(default=1, ge=1),
+                    q_f: str | None = Query(default=None, alias="q"),
+                    type_f: str | None = Query(default=None, alias="type"),
+                    source_f: str | None = Query(default=None, alias="source"),
+                    status_f: str | None = Query(default=None, alias="status"),
+                    group_f: str | None = Query(default=None, alias="group")):
+    return _inv_rows(request, user, db, page=page, q_f=q_f, type_f=type_f,
+                     source_f=source_f, status_f=status_f, group_f=group_f)
+
+
+@router.get("/inventory/new")
+def inventory_new(request: Request,
+                  user: User = Depends(require_roles_page(Role.admin))):
+    return _inv_form(request, user, device=None)
+
+
+@router.get("/inventory/{device_id}/edit")
+def inventory_edit(device_id: int, request: Request,
+                   db: Session = Depends(get_db),
+                   user: User = Depends(require_roles_page(Role.admin))):
+    d = db.get(Device, device_id)
+    if not d:
+        raise HTTPException(404, "Устройство не найдено")
+    return _inv_form(request, user, device=d)
+
+
+def _inv_upsert(db: Session, data: dict, existing: Device | None) -> Device:
+    """Общая для create/update логика сохранения. Кидает HTTPException при ошибках."""
+    name = (data.get("name") or "").strip().lower()
+    if not name:
+        raise HTTPException(400, "Имя устройства обязательно")
+    busy = db.query(Device).filter(
+        Device.name == name,
+        Device.id != (existing.id if existing else -1)).first()
+    if busy:
+        raise HTTPException(400, f"Имя «{name}» уже занято")
+    try:
+        dtype = DeviceType(data.get("type", ""))
+    except ValueError:
+        raise HTTPException(400, "Неверный тип устройства")
+    host = (data.get("host") or "").strip()
+    if not host:
+        raise HTTPException(400, "Адрес (host) обязателен")
+    d = existing or Device()
+    d.name = name
+    d.type = dtype
+    d.host = host
+    try:
+        d.port = int(data.get("port") or 0)
+    except ValueError:
+        raise HTTPException(400, "Порт должен быть числом")
+    d.username = (data.get("username") or "").strip()
+    if data.get("password"):            # пустой пароль = оставить прежний
+        d.password = data["password"]
+    d.enabled = data.get("enabled") == "on"
+    d.description = (data.get("description") or "").strip()
+    if existing is None or existing.source == "manual":
+        d.group = (data.get("group") or "").strip()
+    if existing is None:
+        db.add(d)
+    db.commit()
+    return d
+
+
+@router.post("/inventory")
+async def inventory_create(request: Request,
+                      db: Session = Depends(get_db),
+                      user: User = Depends(require_roles_page(Role.admin))):
+    data = dict(await request.form())
+    try:
+        _inv_upsert(db, data, existing=None)
+    except HTTPException as e:
+        # форма вернётся с текстом ошибки поверх модалки
+        return _inv_form(request, user, device=None,
+                        error=e.detail, status_code=e.status_code)
+    return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
+                     source_f=None, status_f=None, group_f=None,
+                     flash="Устройство добавлено")
+
+
+@router.post("/inventory/sync-zabbix")
+def inventory_sync_zabbix(request: Request,
+                          db: Session = Depends(get_db),
+                          user: User = Depends(require_roles_page(Role.admin))):
+    # Роль уже проверена (admin); вызываем ту же логику, что /api/devices/sync-zabbix
+    from ..api.devices import sync_zabbix as api_sync  # локальный импорт: без циклов
+    s = get_settings()
+    if not s.zabbix_url or not s.zabbix_token:
+        return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
+                         source_f=None, status_f=None, group_f=None,
+                         flash="Zabbix не настроен: задайте NETOPS_ZABBIX_URL "
+                               "и NETOPS_ZABBIX_TOKEN")
+    try:
+        result = api_sync(db=db, _admin=user)
+    except HTTPException as e:
+        return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
+                         source_f=None, status_f=None, group_f=None,
+                         flash=f"Ошибка синхронизации: {e.detail}")
+    message = ("Zabbix: добавлено %d, обновлено %d, отключено %d"
+              % (result["added"], result["updated"], result["disabled_gone"]))
+    return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
+                     source_f=None, status_f=None, group_f=None, flash=message)
+
+
+@router.put("/inventory/{device_id}")
+async def inventory_update(device_id: int, request: Request,
+                     db: Session = Depends(get_db),
+                     user: User = Depends(require_roles_page(Role.admin))):
+    d = db.get(Device, device_id)
+    if not d:
+        raise HTTPException(404, "Устройство не найдено")
+    data = dict(await request.form())
+    if d.source == "zabbix" and data.get("name") and data["name"] != d.name:
+        # Zabbix-устройствам можно менять только enabled (как в /api/devices)
+        return _inv_form(request, user, device=d,
+                         error="Устройства из Zabbix: можно менять только "
+                               "включение/выключение", status_code=400)
+    if d.source == "zabbix" and not data.get("name"):
+        # Быстрый переключатель из таблицы: только enabled
+        d.enabled = data.get("enabled") == "on"
+        db.commit()
+        return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
+                         source_f=None, status_f=None, group_f=None,
+                         flash=f"Устройство обновлено: {d.name}")
+    try:
+        _inv_upsert(db, data, existing=d)
+    except HTTPException as e:
+        return _inv_form(request, user, device=d,
+                         error=e.detail, status_code=e.status_code)
+    return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
+                     source_f=None, status_f=None, group_f=None,
+                     flash="Устройство обновлено")
+
+
+@router.delete("/inventory/{device_id}")
+def inventory_delete(device_id: int, request: Request,
+                     db: Session = Depends(get_db),
+                     user: User = Depends(require_roles_page(Role.admin))):
+    d = db.get(Device, device_id)
+    if not d:
+        raise HTTPException(404, "Устройство не найдено")
+    if d.source == "zabbix":
+        return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
+                         source_f=None, status_f=None, group_f=None,
+                         flash="Устройства из Zabbix удаляются только "
+                               "синхронизацией")
+    name = d.name
+    db.delete(d)
+    db.commit()
+    try:
+        from ..devices.vmware import clear_cache
+        clear_cache()
+    except Exception:  # pragma: no cover - кэш вторичен
+        pass
+    return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
+                     source_f=None, status_f=None, group_f=None,
+                     flash=f"Устройство удалено: {name}")

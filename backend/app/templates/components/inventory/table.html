@@ -1,0 +1,101 @@
+{# HTMX-фрагмент: таблица инвентаря с пагинацией.
+   Ожидает: devices, total, page, pages, filters (dict), flash (str|None). #}
+{% if flash %}
+<div class="mb-3 px-4 py-2.5 rounded-md bg-blue-50 border border-blue-200 text-sm text-blue-800">
+    {{ flash }}
+</div>
+{% endif %}
+<div class="bg-white rounded-xl shadow-sm overflow-x-auto">
+    {% if devices %}
+    <table class="w-full text-sm">
+        <thead>
+            <tr class="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-200">
+                <th class="px-3 py-2.5">Имя</th>
+                <th class="px-3 py-2.5">Тип</th>
+                <th class="px-3 py-2.5">Адрес</th>
+                <th class="px-3 py-2.5">Источник</th>
+                <th class="px-3 py-2.5">Группа</th>
+                <th class="px-3 py-2.5">Статус</th>
+                <th class="px-3 py-2.5"></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for d in devices %}
+            <tr class="border-b border-slate-100 hover:bg-slate-50">
+                <td class="px-3 py-2 font-medium whitespace-nowrap" title="{{ d.description or '' }}">{{ d.name }}</td>
+                <td class="px-3 py-2 whitespace-nowrap">{{ d.type.value if d.type.value else d.type }}</td>
+                <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ d.host }}:{{ d.port }}</td>
+                <td class="px-3 py-2">
+                    {% if d.source == "zabbix" %}
+                    <span class="px-2 py-0.5 rounded text-xs font-semibold bg-violet-100 text-violet-800">zabbix</span>
+                    {% else %}
+                    <span class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-700">manual</span>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ d.group or "—" }}</td>
+                <td class="px-3 py-2">
+                    {% if d.enabled %}
+                    <span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">вкл</span>
+                    {% else %}
+                    <span class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-200 text-slate-600">выкл</span>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-2 text-right whitespace-nowrap">
+                    {% if user.role.value == 'admin' %}
+                        {% if d.source == "zabbix" %}
+                        {# Zabbix-устройство: только быстрый переключатель enabled #}
+                        {% if d.enabled %}
+                        <button class="px-2.5 py-1 rounded-md border border-slate-300 hover:bg-slate-100 text-xs font-medium"
+                                hx-put="/admin/inventory/{{ d.id }}" hx-vals='{"enabled": ""}'
+                                hx-target="#inventory-table">Выключить</button>
+                        {% else %}
+                        <button class="px-2.5 py-1 rounded-md border border-slate-300 hover:bg-slate-100 text-xs font-medium"
+                                hx-put="/admin/inventory/{{ d.id }}" hx-vals='{"enabled": "on"}'
+                                hx-target="#inventory-table">Включить</button>
+                        {% endif %}
+                        {% else %}
+                        <button class="px-2.5 py-1 rounded-md border border-slate-300 hover:bg-slate-100 text-xs font-medium"
+                                hx-get="/admin/inventory/{{ d.id }}/edit"
+                                hx-target="#inventory-modal" hx-swap="innerHTML"
+                                onclick="document.getElementById('inventory-modal').style.display='flex'">
+                            Изменить
+                        </button>
+                        <button class="px-2.5 py-1 rounded-md border border-red-300 text-red-700 hover:bg-red-50 text-xs font-medium"
+                                hx-delete="/admin/inventory/{{ d.id }}"
+                                hx-confirm="Удалить устройство «{{ d.name }}»?"
+                                hx-target="#inventory-table">
+                            Удалить
+                        </button>
+                        {% endif %}
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="p-8 text-center text-slate-400">Устройств нет</div>
+    {% endif %}
+</div>
+
+{# Пагинация: сохраняет текущие фильтры #}
+<div class="flex items-center justify-between mt-3 text-sm text-slate-500">
+    <span>Всего: {{ total }}</span>
+    {% if pages > 1 %}
+    <span class="flex items-center gap-3">
+        {% if page > 1 %}
+        <a href="/admin/inventory/partial/table?{% for k, v in filters.items() %}{{ k }}={{ v }}&amp;{% endfor %}page={{ page - 1 }}"
+           class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100"
+           hx-get="/admin/inventory/partial/table?{% for k, v in filters.items() %}{{ k }}={{ v }}&amp;{% endfor %}page={{ page - 1 }}"
+           hx-target="#inventory-table">Назад</a>
+        {% endif %}
+        <span>Страница {{ page }} из {{ pages }}</span>
+        {% if page < pages %}
+        <a href="/admin/inventory/partial/table?{% for k, v in filters.items() %}{{ k }}={{ v }}&amp;{% endfor %}page={{ page + 1 }}"
+           class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100"
+           hx-get="/admin/inventory/partial/table?{% for k, v in filters.items() %}{{ k }}={{ v }}&amp;{% endfor %}page={{ page + 1 }}"
+           hx-target="#inventory-table">Вперёд</a>
+        {% endif %}
+    </span>
+    {% endif %}
+</div>

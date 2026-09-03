@@ -5,7 +5,86 @@
     <h1 class="text-2xl font-bold">Инвентарь устройств</h1>
     <p class="text-sm text-slate-500">Список и управление устройствами</p>
 </div>
-<div class="bg-white rounded-xl shadow-sm p-8 text-center text-slate-400">
-    Каркас раздела. Управление устройствами переносится в Фазе 3 миграции.
+
+{# Панель фильтров: каждый элемент отправляет значения всех фильтров
+   (hx-include="#inventory-filters") на partial/table и заменяет #inventory-table #}
+<div id="inventory-filters" class="bg-white rounded-xl shadow-sm p-4 mb-4">
+    <div class="grid gap-3 md:grid-cols-5">
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-q">Поиск</label>
+            <input id="f-q" name="q" type="text" placeholder="имя устройства"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                   hx-get="/admin/inventory/partial/table" hx-trigger="keyup changed delay:300ms, search"
+                   hx-target="#inventory-table" hx-include="#inventory-filters">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-type">Тип</label>
+            <select id="f-type" name="type"
+                    class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                    hx-get="/admin/inventory/partial/table" hx-trigger="change"
+                    hx-target="#inventory-table" hx-include="#inventory-filters">
+                <option value="">Все</option>
+                {% for t in device_types %}
+                <option value="{{ t }}">{{ t }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-source">Источник</label>
+            <select id="f-source" name="source"
+                    class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                    hx-get="/admin/inventory/partial/table" hx-trigger="change"
+                    hx-target="#inventory-table" hx-include="#inventory-filters">
+                <option value="">Все</option>
+                <option value="manual">manual</option>
+                <option value="zabbix">zabbix</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-status">Статус</label>
+            <select id="f-status" name="status"
+                    class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                    hx-get="/admin/inventory/partial/table" hx-trigger="change"
+                    hx-target="#inventory-table" hx-include="#inventory-filters">
+                <option value="">Все</option>
+                <option value="on">Включён</option>
+                <option value="off">Выключен</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-group">Группа</label>
+            <input id="f-group" name="group" type="text" placeholder="группа"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                   hx-get="/admin/inventory/partial/table" hx-trigger="keyup changed delay:300ms, search"
+                   hx-target="#inventory-table" hx-include="#inventory-filters">
+        </div>
+    </div>
+    {% if user.role.value == 'admin' %}
+    <div class="flex flex-wrap gap-2 mt-4">
+        <button type="button"
+                class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
+                hx-get="/admin/inventory/new" hx-target="#inventory-modal" hx-swap="innerHTML">
+            + Добавить устройство
+        </button>
+        <button type="button"
+                class="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700"
+                hx-post="/admin/inventory/sync-zabbix"
+                hx-confirm="Синхронизировать устройства с Zabbix?"
+                hx-target="#inventory-table">
+            ⟳ Синхронизировать с Zabbix
+        </button>
+    </div>
+    {% endif %}
 </div>
+
+{# Контейнер таблицы: наполняется HTMX при загрузке страницы #}
+<div id="inventory-table"
+     hx-get="/admin/inventory/partial/table"
+     hx-trigger="load"
+     hx-include="#inventory-filters">
+    <div class="bg-white rounded-xl shadow-sm p-8 text-center text-slate-400">Загрузка…</div>
+</div>
+
+{# Модальное окно (форма добавления/редактирования): наполняется HTMX #}
+<div id="inventory-modal" style="display: contents"></div>
 {% endblock %}

@@ -1,0 +1,111 @@
+{# HTMX-фрагмент: самостоятельная модалка с формой устройства.
+   Ожидает: device (Device|None), action, method ("post"|"put"),
+             error (str|None), device_types (список строк).
+   Для zabbix-устройства форма read-only, кроме enabled. #}
+<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:1rem"
+     onclick="if(event.target===this)this.remove()">
+    <div style="background:#fff;border-radius:.75rem;max-width:32rem;width:100%;max-height:90vh;overflow-y:auto;padding:1.5rem"
+         id="inventory-form-modal">
+        <div class="flex items-start justify-between mb-4">
+            <div>
+                <h2 class="text-lg font-bold">{% if device %}Изменить устройство{% else %}Новое устройство{% endif %}</h2>
+                <p class="text-xs text-slate-500">
+                    {% if device and device.source == "zabbix" %}
+                    Источник Zabbix: поля недоступны, можно менять только включение
+                    {% else %}
+                    Управляемое вручную устройство
+                    {% endif %}
+                </p>
+            </div>
+            <button type="button" class="text-slate-400 hover:text-slate-700 text-xl leading-none"
+                    onclick="this.closest('div[id]').remove(); return false;">&times;</button>
+        </div>
+
+        {% if error %}
+        <div class="mb-4 px-4 py-2.5 rounded-md bg-red-50 border border-red-200 text-sm text-red-800">{{ error }}</div>
+        {% endif %}
+
+        <form {% if method == "put" %}hx-put="{{ action }}"{% else %}hx-post="{{ action }}"{% endif %}
+              hx-target="#inventory-table"
+              hx-swap="outerHTML"
+              hx-on::after-request="if(event.detail.successful)document.getElementById('inventory-modal').innerHTML=''"
+              class="grid gap-3">
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1" for="d-name">Имя *</label>
+                <input id="d-name" name="name" type="text" required value="{{ device.name if device else '' }}"
+                       {% if device and device.source == "zabbix" %}disabled{% endif %}
+                       class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1" for="d-type">Тип *</label>
+                    <select id="d-type" name="type"
+                            {% if device and device.source == "zabbix" %}disabled{% endif %}
+                            class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                        {% for t in device_types %}
+                        <option value="{{ t }}" {% if device and device.type.value == t %}selected{% endif %}>{{ t }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1" for="d-port">Порт</label>
+                    <input id="d-port" name="port" type="number" min="0" max="65535" value="{{ device.port if device else 22 }}"
+                           {% if device and device.source == "zabbix" %}disabled{% endif %}
+                           class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                </div>
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1" for="d-host">Адрес (host) *</label>
+                <input id="d-host" name="host" type="text" required value="{{ device.host if device else '' }}"
+                       {% if device and device.source == "zabbix" %}disabled{% endif %}
+                       class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1" for="d-username">Логин</label>
+                    <input id="d-username" name="username" type="text" value="{{ device.username if device else '' }}"
+                           {% if device and device.source == "zabbix" %}disabled{% endif %}
+                           class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1" for="d-password">Пароль</label>
+                    <input id="d-password" name="password" type="password" autocomplete="new-password"
+                           placeholder="{{ 'оставьте пустым, чтобы не менять' if device else '' }}"
+                           {% if device and device.source == "zabbix" %}disabled{% endif %}
+                           class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1" for="d-group">Группа</label>
+                    <input id="d-group" name="group" type="text" value="{{ device.group if device else '' }}"
+                           {% if device and device.source == "zabbix" %}disabled{% endif %}
+                           class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                </div>
+                <div class="flex items-end">
+                    <label class="flex items-center gap-2 text-sm text-slate-700">
+                        <input type="checkbox" name="enabled" value="on"
+                               {% if not device or device.enabled %}checked{% endif %}
+                               class="rounded border-slate-300">
+                        Включено
+                    </label>
+                </div>
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1" for="d-description">Описание</label>
+                <input id="d-description" name="description" type="text" value="{{ device.description if device else '' }}"
+                       {% if device and device.source == "zabbix" %}disabled{% endif %}
+                       class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+            </div>
+            <div class="flex justify-end gap-2 mt-2">
+                <button type="button"
+                        class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-100 text-sm font-medium"
+                        onclick="document.getElementById('inventory-modal').innerHTML=''; return false;">Отмена</button>
+                <button type="submit"
+                        class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">
+                    Сохранить
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
