@@ -170,6 +170,34 @@ netops-llm/
 - **Системный промпт обновлён**: правило «что болит» → get_infrastructure_health;
   анализ порогов (датасторы <15%, CPU/RAM >85%, снапшоты).
 
+### Этап 7 — миграция UI, Фазы 0–2 (готово, 2026-09-02)
+Выполняется план из migration.md (16 фаз): чат → Chainlit, админка → FastAPI
++ Jinja2 + HTMX + Tailwind, backend остаётся источником логики/RBAC/аудита.
+Снимок состояния и инварианты: docs/migration/current-state.md.
+- **Фаза 0a** (a01254a): current-state.md переписан как точный снимок кода
+  (роли admin/engineer/viewer, 18 инструментов, SSE-контракт delta/tool/
+  tool_result/error + [DONE], JWT 12 ч).
+- **Фаза 0b — мок-режим NETOPS_MOCK_MODE** (c9a9c11): при true сетевые
+  инструменты отдают фейковые данные (перехват в register_tool, agent/mock.py),
+  LLM подменяется MockLLMClient (сценарии: обычный/ошибка/лимит 20 шагов).
+  Без сетевых вызовов. mock_smoke.py — 15/15 PASS.
+- **Фаза 1 — внутренний API для Chainlit** (8331de7): агентский цикл выделен
+  в run_agent_cycle (SSE-контракт старого SPA не изменён); POST
+  /internal/chat/stream: сервисный токен NETOPS_INTERNAL_SERVICE_TOKEN
+  (constant-time, пустой = выключено), пользователь по X-User-Id, создание
+  диалога, аудит через execute_tool. internal_api_test.py — 16/16 PASS.
+- **Фаза 2 — каркас админки /admin/*** (ee64829): Jinja2 + HTMX (локально,
+  static/js/htmx.min.js) + Tailwind (CDN, прод-сборка — Фаза 13); логин/
+  логаут с JWT в HttpOnly cookie netops_token (вход через тот же
+  ad_authenticate); dashboard + заглушки инвентарь/диалоги/аудит/настройки;
+  серверный RBAC: аудит+настройки — admin, инвентарь+диалоги — admin+engineer,
+  viewer — только чат; exception-handler: /admin/* 401 → редирект на логин,
+  403 → HTML (API-контракты не затронуты). admin_ui_test.py — 16/16 PASS.
+- Регресс: smoke_test.py зелёный; все тесты изолированы (временная sqlite
+  через NETOPS_DATABASE_URL до импорта app, netops.db не трогается).
+- Дальше: Фазы 3–5 (контент разделов админки), 6–9 (Chainlit-чат),
+  10–16 (nginx/compose/переезд) — по migration.md.
+
 ## 6. Выученные грабли (важно!)
 
 1. **Zabbix 6.2**: токен работает только параметром `auth` в теле JSON-RPC
@@ -262,13 +290,19 @@ build_system_prompt добавляет: текущее время + список
 - Пароли устройств в БД открытым текстом — перед продом шифровать (Fernet + ключ из env).
 - В UI-форме есть типы edgecore/snr/aruba, но в DeviceType их пока нет
   (шаг с netmiko не применялся) — добавляются одним изменением enum вместе с SSH-этапом.
-- Управление пользователями: вкладка в UI + API /api/users (доступ выдаёт админ).
 - Нет refresh-токенов (JWT на 12 часов).
 - netmiko/net_show/ssh_cli.py — НЕ вносились в код (шаг пропущен осознанно).
 - Ключи адаптера VMware (cpu_usage_percent, free_percent) зависят от реализации
   vmware.py — при изменении адаптера нужно обновить _get_free_percent и пороги.
 
 ## 9. Дорожная карта — что дальше
+
+### Текущий фокус: миграция UI (migration.md, 16 фаз)
+- Готово: Фазы 0–2 (Этап 7 в §5) — снимок состояния, мок-режим,
+  /internal/chat/stream, каркас админки /admin/*.
+- Следующие: Фазы 3–5 (контент разделов админки: инвентарь, аудит,
+  настройки/пользователи, история диалогов), Фазы 6–9 (Chainlit-чат),
+  Фазы 10–16 (nginx, docker compose, переезд, прод-сборка Tailwind).
 
 ### Ближайший шаг: прямой SNMP для ручных устройств
 - Форма: версия SNMP (v2c community / v3), поля в Device (snmp_version и т.п.).
