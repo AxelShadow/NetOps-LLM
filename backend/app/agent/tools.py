@@ -4,6 +4,7 @@ import logging
 import platform
 import re
 import subprocess
+import time
 import datetime as dt
 from typing import Optional, Any
 from collections import defaultdict
@@ -787,6 +788,7 @@ def execute_tool(name: str, args: dict, user_id: int | None = None,
                  conversation_id: int | None = None, user_role: str = "viewer") -> tuple[str, str]:
     """Единая точка входа с проверкой прав и аудитом."""
     status = "ok"
+    duration_ms: int | None = None
     func = _registry.get(name)
 
     if not func:
@@ -796,6 +798,7 @@ def execute_tool(name: str, args: dict, user_id: int | None = None,
         result = f"Недостаточно прав (роль: {user_role}) для выполнения '{name}'."
         status = "denied"
     else:
+        started = time.monotonic()
         try:
             result, status = func(**args)
             if len(result) > MAX_RESULT:
@@ -806,6 +809,8 @@ def execute_tool(name: str, args: dict, user_id: int | None = None,
                 result, status = str(e), "denied"
             else:
                 result, status = f"Ошибка выполнения: {e}", "error"
+        finally:
+            duration_ms = int((time.monotonic() - started) * 1000)
 
     # Аудит-лог
     try:
@@ -813,7 +818,8 @@ def execute_tool(name: str, args: dict, user_id: int | None = None,
             db.add(AuditLog(user_id=user_id, conversation_id=conversation_id,
                             tool=name,
                             arguments=json.dumps(args, ensure_ascii=False),
-                            result=(result or "")[:4000], status=status))
+                            result=(result or "")[:4000], status=status,
+                            duration_ms=duration_ms))
             db.commit()
     except Exception:
         log.exception("Не удалось записать аудит")

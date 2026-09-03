@@ -1,6 +1,6 @@
 import enum
 import datetime as dt
-from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, Enum as SAEnum
+from sqlalchemy import String, Boolean, DateTime, ForeignKey, Integer, Text, Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
@@ -102,3 +102,4 @@ class AuditLog(Base):
     arguments: Mapped[str] = mapped_column(Text)        # JSON аргументов
     result: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16))     # ok | error | denied
+    duration_ms: Mapped[int | None] = mapped_column(Integer)  # длительность вызова

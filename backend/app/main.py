@@ -59,10 +59,32 @@ def _ensure_message_columns():
                 log.info("Добавлена колонка messages.%s", col)
 
 
+# Колонка audit_log.duration_ms, добавленная после создания таблицы:
+_AUDIT_MIGRATIONS = [
+    ("duration_ms", "INTEGER"),
+]
+
+
+def _ensure_audit_columns():
+    """Добавляет новые колонки в существующую таблицу audit_log."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    if "audit_log" not in insp.get_table_names():
+        return
+    existing = {c["name"] for c in insp.get_columns("audit_log")}
+    with engine.begin() as conn:
+        for col, col_type in _AUDIT_MIGRATIONS:
+            if col not in existing:
+                conn.execute(text(
+                    f"ALTER TABLE audit_log ADD COLUMN {col} {col_type}"))
+                log.info("Добавлена колонка audit_log.%s", col)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(engine)
     _ensure_message_columns()
+    _ensure_audit_columns()
     bootstrap_admin()
     yield
 

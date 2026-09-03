@@ -3,9 +3,75 @@
 {% block content %}
 <div class="mb-6">
     <h1 class="text-2xl font-bold">Аудит</h1>
-    <p class="text-sm text-slate-500">Журнал вызовов инструментов</p>
+    <p class="text-sm text-slate-500">Журнал вызовов инструментов агентом</p>
 </div>
-<div class="bg-white rounded-xl shadow-sm p-8 text-center text-slate-400">
-    Каркас раздела. Журнал аудита наполняется в Фазе 5 миграции.
+
+{# Панель фильтров: каждый элемент отправляет значения всех фильтров
+   (hx-include="#audit-filters") на partial/table и заменяет #audit-table #}
+<div id="audit-filters" class="bg-white rounded-xl shadow-sm p-4 mb-4">
+    <div class="grid gap-3 md:grid-cols-6">
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-user">Пользователь</label>
+            <input id="f-user" name="user" type="text" placeholder="логин"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                   hx-get="/admin/audit/partial/table" hx-trigger="keyup changed delay:300ms"
+                   hx-target="#audit-table" hx-include="#audit-filters">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-tool">Инструмент</label>
+            <select id="f-tool" name="tool"
+                    class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                    hx-get="/admin/audit/partial/table" hx-trigger="change"
+                    hx-target="#audit-table" hx-include="#audit-filters">
+                <option value="">Все</option>
+                {% for t in tools %}
+                <option value="{{ t }}">{{ t }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-status">Статус</label>
+            <select id="f-status" name="status"
+                    class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                    hx-get="/admin/audit/partial/table" hx-trigger="change"
+                    hx-target="#audit-table" hx-include="#audit-filters">
+                <option value="">Все</option>
+                <option value="ok">ok</option>
+                <option value="error">error</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-date-from">Дата с</label>
+            <input id="f-date-from" name="date_from" type="date"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                   hx-get="/admin/audit/partial/table" hx-trigger="change"
+                   hx-target="#audit-table" hx-include="#audit-filters">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-date-to">Дата по</label>
+            <input id="f-date-to" name="date_to" type="date"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                   hx-get="/admin/audit/partial/table" hx-trigger="change"
+                   hx-target="#audit-table" hx-include="#audit-filters">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-dialog">Диалог</label>
+            <input id="f-dialog" name="dialog" type="number" placeholder="ID"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                   hx-get="/admin/audit/partial/table" hx-trigger="keyup changed delay:300ms"
+                   hx-target="#audit-table" hx-include="#audit-filters">
+        </div>
+    </div>
 </div>
+
+{# Контейнер таблицы: наполняется HTMX при загрузке страницы #}
+<div id="audit-table"
+     hx-get="/admin/audit/partial/table"
+     hx-trigger="load"
+     hx-include="#audit-filters">
+    <div class="bg-white rounded-xl shadow-sm p-8 text-center text-slate-400">Загрузка…</div>
+</div>
+
+{# Модальное окно деталей: наполняется HTMX (кнопка «Детали» в таблице) #}
+<div id="audit-modal" style="display: contents"></div>
 {% endblock %}

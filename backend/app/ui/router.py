@@ -6,17 +6,19 @@ RBAC. Контент разделов наполняется в Фазах 3-5; 
 (frontend/index.html) продолжает работать через /api/* без изменений.
 """
 import logging
+from datetime import datetime, time as dtime
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..db import SessionLocal
-from ..models import Role, User
+from ..db import SessionLocal, get_db
+from ..models import AuditLog, Role, User
 from ..auth.ldap_auth import ad_authenticate
 from ..auth.jwt_utils import create_token
 from .deps import COOKIE_NAME, load_user_from_token, get_current_user_page, \
@@ -149,14 +151,148 @@ def conversations_page(request: Request,
 
 @router.get("/audit")
 def audit_page(request: Request,
+               db: Session = Depends(get_db),
                user: User = Depends(require_roles_page(Role.admin))):
-    return _render(request, user, "pages/audit.html", {})
+    tools = [row[0] for row in db.query(AuditLog.tool).distinct().order_by(AuditLog.tool)]
+    return _render(request, user, "pages/audit.html", {"tools": tools})
 
 
 @router.get("/settings")
 def settings_page(request: Request,
                   user: User = Depends(require_roles_page(Role.admin))):
     return _render(request, user, "pages/settings.html", {})
+
+
+# --- Аудит: HTMX-фрагменты (Фаза 4 миграции) -------------------------------
+
+_AUDIT_PAGE_SIZE = 25
+
+
+def _duration_display(ms: int | None) -> str:
+    """Человеческий вид длительности: 123 мс / 1.5 с / «—» (None)."""
+    if ms is None:
+        return "—"
+    if ms < 1000:
+        return f"{ms} мс"
+    return f"{ms / 1000:.1f} с"
+
+
+def _audit_query(db: Session, user_f: str | None, tool_f: str | None,
+                 status_f: str | None, date_from: datetime | None,
+                 date_to: datetime | None, dialog: int | None):
+    """Базовый запрос аудита с фильтрами (join User для username)."""
+    q = (
+        db.query(AuditLog, User.username)
+        .outerjoin(User, AuditLog.user_id == User.id)
+        .order_by(AuditLog.id.desc())
+    )
+    if user_f:
+        q = q.filter(User.username.ilike(f"%{user_f}%"))
+    if tool_f:
+        q = q.filter(AuditLog.tool == tool_f)
+    if status_f:
+        q = q.filter(AuditLog.status == status_f)
+    if date_from:
+        q = q.filter(AuditLog.created_at >= date_from)
+    if date_to:
+        # date_to — inclusive: включаем весь указанный день
+        q = q.filter(AuditLog.created_at <
+                      datetime.combine(date_to, dtime(hour=23, minute=59,
+                                                       second=59)))
+    if dialog:
+        q = q.filter(AuditLog.conversation_id == dialog)
+    return q
+
+
+@router.get("/audit/partial/table")
+def audit_table(request: Request,
+                db: Session = Depends(get_db),
+                user: User = Depends(require_roles_page(Role.admin)),
+                page: int = Query(default=1, ge=1),
+                user_f: str | None = Query(default=None, alias="user"),
+                tool_f: str | None = Query(default=None, alias="tool"),
+                status_f: str | None = Query(default=None, alias="status"),
+                date_from: str | None = Query(default=None),
+                date_to: str | None = Query(default=None),
+                dialog: int | None = Query(default=None)):
+    # input[type=date] шлёт YYYY-MM-DD; битые значения игнорируем
+    try:
+        d_from = datetime.strptime(date_from, "%Y-%m-%d") if date_from else None
+    except ValueError:
+        d_from = None
+    try:
+        d_to = datetime.strptime(date_to, "%Y-%m-%d") if date_to else None
+    except ValueError:
+        d_to = None
+    rows = _audit_query(db, user_f, tool_f, status_f, d_from, d_to, dialog)
+    total = rows.count()
+    pages = max(1, (total + _AUDIT_PAGE_SIZE - 1) // _AUDIT_PAGE_SIZE)
+    page = min(page, pages)
+    offset = (page - 1) * _AUDIT_PAGE_SIZE
+    entries = []
+    for log, username in rows.offset(offset).limit(_AUDIT_PAGE_SIZE):
+        created = log.created_at
+        if created.tzinfo is not None:
+            created = created.astimezone().replace(tzinfo=None)
+        result = log.result or ""
+        entries.append({
+            "id": log.id,
+            "created_at_local": created.strftime("%d.%m.%Y %H:%M:%S"),
+            "username": username,
+            "conversation_id": log.conversation_id,
+            "tool": log.tool,
+            "status": log.status,
+            "duration_display": _duration_display(log.duration_ms),
+            "result_short": result[:60],
+        })
+    return templates.TemplateResponse(request, "components/audit/table.html", {
+        "request": request,
+        "entries": entries,
+        "total": total,
+        "page": page,
+        "pages": pages,
+        "filters": {
+            "user": user_f or "",
+            "tool": tool_f or "",
+            "status": status_f or "",
+            "date_from": date_from or "",
+            "date_to": date_to or "",
+            "dialog": dialog or "",
+        },
+    })
+
+
+@router.get("/audit/{entry_id}/details")
+def audit_details(request: Request,
+                  entry_id: int,
+                  db: Session = Depends(get_db),
+                  user: User = Depends(require_roles_page(Role.admin))):
+    row = (
+        db.query(AuditLog, User.username)
+        .outerjoin(User, AuditLog.user_id == User.id)
+        .filter(AuditLog.id == entry_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Запись аудита не найдена")
+    log, username = row
+    created = log.created_at
+    if created.tzinfo is not None:
+        created = created.astimezone().replace(tzinfo=None)
+    return templates.TemplateResponse(request, "components/audit/details.html", {
+        "request": request,
+        "e": {
+            "id": log.id,
+            "created_at_local": created.strftime("%d.%m.%Y %H:%M:%S"),
+            "username": username,
+            "conversation_id": log.conversation_id,
+            "tool": log.tool,
+            "status": log.status,
+            "duration_display": _duration_display(log.duration_ms),
+            "arguments": log.arguments or "",
+            "result": log.result or "",
+        },
+    })
 
 
 # 401/403 обрабатываются на уровне приложения (main.py): FastAPI не
