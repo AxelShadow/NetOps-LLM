@@ -5,11 +5,13 @@
 RBAC. Контент разделов наполняется в Фазах 3-5; старый SPA
 (frontend/index.html) продолжает работать через /api/* без изменений.
 """
+import asyncio
 import logging
 from datetime import datetime, time as dtime
 from pathlib import Path
 from urllib.parse import quote
 
+import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -159,8 +161,161 @@ def audit_page(request: Request,
 
 @router.get("/settings")
 def settings_page(request: Request,
+                  db: Session = Depends(get_db),
                   user: User = Depends(require_roles_page(Role.admin))):
-    return _render(request, user, "pages/settings.html", {})
+    s = get_settings()
+    vmware_devices = db.query(Device).filter(
+        Device.type.in_([DeviceType.vcenter, DeviceType.esxi]),
+        Device.enabled.is_(True)
+    ).order_by(Device.name).all()
+    ctx = {
+        "settings": _settings_view(s),
+        "vmware_devices": vmware_devices,
+    }
+    return _render(request, user, "pages/settings.html", ctx)
+
+
+def _app_version() -> str:
+    """Версия приложения: короткий хеш HEAD git (кэшируется).
+
+    Отдельной константы версии в проекте нет; git-хеш — самый честный
+    идентификатор сборки. Кэш, т.к. вызывается при каждом открытии страницы.
+    """
+    cached = getattr(_app_version, "_value", None)
+    if cached is not None:
+        return cached
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=3
+        )
+        value = out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else "dev"
+    except Exception:
+        value = "dev"
+    setattr(_app_version, "_value", value)
+    return value
+
+
+def _settings_view(s) -> dict:
+    """Параметры конфигурации для страницы настроек, без секретов.
+
+    Значения берутся из переменных окружения (app/config.py) и меняются
+    только перезапуском с новым окружением — потому страница read-only.
+    Секреты (jwt_secret, llm_api_key, zabbix_token, пароли) не показываем.
+    """
+    from ..api.chat import MAX_AGENT_STEPS
+    return {
+        "general": [
+            ("Версия приложения", _app_version()),
+            ("Режим разработки (DEV_MODE)", "вкл" if s.dev_mode else "выкл"),
+            ("Мок-режим", "вкл" if s.mock_mode else "выкл"),
+            ("Авто-регистрация пользователей", "вкл" if s.auto_register_users else "выкл"),
+            ("Сообщений истории в контексте", s.history_messages),
+            ("Лимит шагов агента", MAX_AGENT_STEPS),
+        ],
+        "llm": [
+            ("URL", s.llm_base_url),
+            ("Модель по умолчанию", s.llm_default_model or "первая доступная"),
+            ("Таймаут, с", s.llm_timeout),
+            ("API-ключ", "задан" if s.llm_api_key else "не задан"),
+        ],
+        "zabbix": [
+            ("URL", s.zabbix_url or "не настроен"),
+            ("Токен", "задан" if s.zabbix_token else "не задан"),
+        ],
+        "ldap": [
+            ("Сервер AD", s.ad_server),
+            ("Домен", s.ad_domain),
+            ("Base DN поиска", s.ad_search_base),
+        ],
+        "llm_url": s.llm_base_url,
+        "zabbix_url": s.zabbix_url or "не настроен",
+    }
+
+
+# --- Настройки: HTMX-проверки подключений (Фаза 5 миграции) ------------------
+
+_CHECK_TIMEOUT = 5.0  # секунд на каждую проверку
+
+
+def _check_tpl(request: Request, user: User, ok: bool, title: str, detail: str):
+    return templates.TemplateResponse(
+        request, "components/settings/check.html",
+        _ctx(request, user, ok=ok, title=title, detail=detail))
+
+
+@router.get("/settings/partial/check/llm")
+async def settings_check_llm(request: Request,
+                             user: User = Depends(require_roles_page(Role.admin))):
+    s = get_settings()
+    if s.mock_mode:
+        return _check_tpl(request, user, True, "Мок-режим",
+                          "Сетевые вызовы LLM отключены, проверка не требуется")
+    try:
+        from ..llm.client import llm
+        models = await asyncio.wait_for(llm.list_models(),
+                                        timeout=_CHECK_TIMEOUT)
+        return _check_tpl(request, user, True, "Подключено",
+                          "Модели: " + (", ".join(models[:5]) if models
+                                        else "ни одной не загружено"))
+    except Exception as e:
+        return _check_tpl(request, user, False, "Недоступно",
+                          "%s: %s" % (type(e).__name__, str(e)[:200]))
+
+
+@router.get("/settings/partial/check/zabbix")
+async def settings_check_zabbix(request: Request,
+                                user: User = Depends(require_roles_page(Role.admin))):
+    s = get_settings()
+    if not s.zabbix_url or not s.zabbix_token:
+        return _check_tpl(request, user, False, "Не настроен",
+                          "Задайте NETOPS_ZABBIX_URL и NETOPS_ZABBIX_TOKEN")
+    try:
+        async with httpx.AsyncClient(timeout=_CHECK_TIMEOUT) as client:
+            resp = await client.post(
+                s.zabbix_url,
+                json={"jsonrpc": "2.0", "method": "apiinfo.version",
+                      "params": {}, "id": 1})
+            resp.raise_for_status()
+            data = resp.json()
+        version = (data.get("result") or "?") if isinstance(data, dict) else "?"
+        return _check_tpl(request, user, True, "Подключено",
+                          "Версия API Zabbix: " + str(version))
+    except Exception as e:
+        return _check_tpl(request, user, False, "Недоступно",
+                          "%s: %s" % (type(e).__name__, str(e)[:200]))
+
+
+@router.get("/settings/partial/check/vmware")
+async def settings_check_vmware(request: Request,
+                                db: Session = Depends(get_db),
+                                user: User = Depends(require_roles_page(Role.admin))):
+    device = db.query(Device).filter(
+        Device.type.in_([DeviceType.vcenter, DeviceType.esxi]),
+        Device.enabled.is_(True)
+    ).order_by(Device.name).first()
+    if not device:
+        return _check_tpl(request, user, False, "Нет устройств",
+                          "В инвентаре нет включённых VMware-устройств")
+    try:
+        from ..devices.vmware import get_adapter
+        def _ping():
+            get_adapter(device).get_hosts()
+        # to_thread сам не прерывает блокирующий pyvmomi, поэтому wait_for:
+        # поток останется дорабатывать, но запрос вернётся через таймаут
+        await asyncio.wait_for(asyncio.to_thread(_ping),
+                               timeout=_CHECK_TIMEOUT)
+        return _check_tpl(request, user, True, "Подключено",
+                          "%s: список хостов получен" % device.name)
+    except asyncio.TimeoutError:
+        return _check_tpl(request, user, False, "Недоступно",
+                          "%s: нет ответа за %.0f с" % (device.name,
+                                                        _CHECK_TIMEOUT))
+    except Exception as e:
+        return _check_tpl(request, user, False, "Недоступно",
+                          "%s: %s: %s" % (device.name, type(e).__name__,
+                                          str(e)[:200]))
 
 
 # --- Аудит: HTMX-фрагменты (Фаза 4 миграции) -------------------------------

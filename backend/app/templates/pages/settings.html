@@ -2,10 +2,107 @@
 {% block title %}Настройки — NetOps Admin{% endblock %}
 {% block content %}
 <div class="mb-6">
-    <h1 class="text-2xl font-bold">Настройки</h1>
-    <p class="text-sm text-slate-500">Пользователи и параметры системы</p>
+    <h1 class="text-2xl font-bold">Настройки системы</h1>
+    <p class="text-sm text-slate-500">Диагностика подключений и параметры конфигурации</p>
 </div>
-<div class="bg-white rounded-xl shadow-sm p-8 text-center text-slate-400">
-    Каркас раздела. Управление пользователями и настройками — Фазы 5 миграции.
+
+{# Настройки доступны только для чтения: значения задаются переменными окружения (app/config.py).
+   Секреты (ключи, токены, пароли) не отображаются. #}
+
+{# --- Секция: диагностика подключений --- #}
+<div class="bg-white rounded-xl shadow-sm p-4 mb-4">
+    <h2 class="text-base font-bold mb-3">Подключения</h2>
+    <div class="grid gap-3 md:grid-cols-3">
+        <div id="check-llm" class="border border-slate-200 rounded-lg p-3">
+            <div class="flex items-center justify-between mb-2">
+                <span class="font-medium text-sm">LLM (LM Studio)</span>
+                <button class="px-2.5 py-1 rounded-md border border-slate-300 hover:bg-slate-100 text-xs font-medium"
+                        hx-get="/admin/settings/partial/check/llm"
+                        hx-target="#check-llm-result"
+                        hx-indicator="#check-llm-indicator">Проверить</button>
+            </div>
+            <div class="text-xs text-slate-500">{{ settings.llm_url }}</div>
+            <div id="check-llm-result" class="text-sm mt-2 text-slate-400">не проверялось</div>
+            <img id="check-llm-indicator" src="/admin/static/img/spinner.svg"
+                 class="htmx-indicator" width="16" height="16" alt="...">
+        </div>
+        <div id="check-zabbix" class="border border-slate-200 rounded-lg p-3">
+            <div class="flex items-center justify-between mb-2">
+                <span class="font-medium text-sm">Zabbix API</span>
+                <button class="px-2.5 py-1 rounded-md border border-slate-300 hover:bg-slate-100 text-xs font-medium"
+                        hx-get="/admin/settings/partial/check/zabbix"
+                        hx-target="#check-zabbix-result"
+                        hx-indicator="#check-zabbix-indicator">Проверить</button>
+            </div>
+            <div class="text-xs text-slate-500">{{ settings.zabbix_url }}</div>
+            <div id="check-zabbix-result" class="text-sm mt-2 text-slate-400">не проверялось</div>
+            <img id="check-zabbix-indicator" src="/admin/static/img/spinner.svg"
+                 class="htmx-indicator" width="16" height="16" alt="...">
+        </div>
+        <div id="check-vmware" class="border border-slate-200 rounded-lg p-3">
+            <div class="flex items-center justify-between mb-2">
+                <span class="font-medium text-sm">VMware</span>
+                <button class="px-2.5 py-1 rounded-md border border-slate-300 hover:bg-slate-100 text-xs font-medium"
+                        hx-get="/admin/settings/partial/check/vmware"
+                        hx-target="#check-vmware-result"
+                        hx-indicator="#check-vmware-indicator">Проверить</button>
+            </div>
+            <div class="text-xs text-slate-500">
+                {{ vmware_devices|length }} упр. в инвентаре
+                {% if vmware_devices %}(проверка: {{ vmware_devices[0].name }}){% endif %}
+            </div>
+            <div id="check-vmware-result" class="text-sm mt-2 text-slate-400">не проверялось</div>
+            <img id="check-vmware-indicator" src="/admin/static/img/spinner.svg"
+                 class="htmx-indicator" width="16" height="16" alt="...">
+        </div>
+    </div>
+</div>
+
+{# --- Секция: параметры конфигурации (только чтение) --- #}
+<div class="grid gap-4 md:grid-cols-2">
+    <div class="bg-white rounded-xl shadow-sm p-4">
+        <h2 class="text-base font-bold mb-3">Основное</h2>
+        <dl class="text-sm divide-y divide-slate-100">
+            {% for label, value in settings.general %}
+            <div class="flex justify-between gap-3 py-1.5">
+                <dt class="text-slate-500">{{ label }}</dt>
+                <dd class="font-medium text-right">{{ value }}</dd>
+            </div>
+            {% endfor %}
+        </dl>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm p-4">
+        <h2 class="text-base font-bold mb-3">LLM</h2>
+        <dl class="text-sm divide-y divide-slate-100">
+            {% for label, value in settings.llm %}
+            <div class="flex justify-between gap-3 py-1.5">
+                <dt class="text-slate-500">{{ label }}</dt>
+                <dd class="font-medium text-right">{{ value }}</dd>
+            </div>
+            {% endfor %}
+        </dl>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm p-4">
+        <h2 class="text-base font-bold mb-3">Zabbix</h2>
+        <dl class="text-sm divide-y divide-slate-100">
+            {% for label, value in settings.zabbix %}
+            <div class="flex justify-between gap-3 py-1.5">
+                <dt class="text-slate-500">{{ label }}</dt>
+                <dd class="font-medium text-right">{{ value }}</dd>
+            </div>
+            {% endfor %}
+        </dl>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm p-4">
+        <h2 class="text-base font-bold mb-3">Аутентификация (AD)</h2>
+        <dl class="text-sm divide-y divide-slate-100">
+            {% for label, value in settings.ldap %}
+            <div class="flex justify-between gap-3 py-1.5">
+                <dt class="text-slate-500">{{ label }}</dt>
+                <dd class="font-medium text-right">{{ value }}</dd>
+            </div>
+            {% endfor %}
+        </dl>
+    </div>
 </div>
 {% endblock %}
