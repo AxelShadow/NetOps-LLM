@@ -71,4 +71,7 @@ async def internal_chat_stream(
         run_agent_cycle(user, conv, data.content, data.model),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache",
-                 "X-Accel-Buffering": "no"})
+                 "X-Accel-Buffering": "no",
+                 # Фаза 6: id диалога для Chainlit (созданного и
+                 # продолжаемого) — в потоке его нет.
+                 "X-Conversation-Id": str(conv.id)})

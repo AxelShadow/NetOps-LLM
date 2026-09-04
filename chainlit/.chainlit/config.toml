@@ -1,0 +1,16 @@
+[project]
+name = "NetOps-LLM Чат"
+# Сессия не должна переживать срок JWT FastAPI (12 ч по умолчанию)
+user_session_timeout = 43200
+
+[features]
+spontaneous_file_upload = { enabled = false }
+unsafe_allow_html = false
+
+[UI]
+name = "NetOps-LLM"
+default_cot = "hidden"
+
+[meta]
+generated_by = "2.12.0"
+tagline = "Инфраструктурный ассистент"

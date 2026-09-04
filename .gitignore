@@ -6,3 +6,5 @@ backend/.env
 *.log
 Thumbs.db
 .env
+chainlit/.files/
+chainlit/.chainlit/translations/
