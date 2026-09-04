@@ -259,7 +259,39 @@ netops-llm/
   авто-регистрирует *@ad_domain (дизайн NETOPS_DEV_MODE); X-User-Email
   несёт username из БД (bootstrap-админ хранится как "admin" без домена).
 
-## 6. Выученные грабли (важно!)
+### Этап 10 — миграция UI, Фаза 9: история диалогов (готово, 2026-09-04)
+/admin/conversations — список диалогов + просмотр сообщений; источник
+истины — БД FastAPI (Chainlit свою БД не заводит). Клон паттерна аудита
+(Этап 8), read-only.
+- **Маршруты (be614e4)**: GET /admin/conversations/partial/table —
+  агрегат _conv_query: join User (username), count(Message.id),
+  coalesce(max(messages.created_at), created_at) как «дата обновления» —
+  столбца в схеме нет, миграция не нужна; group_by Conversation.id +
+  User.username (иначе Postgres only_full_group_by; в sqlite молча бы
+  прошло), сортировка по последней активности DESC; фильтры user/q
+  (ilike) + date_from/date_to (inclusive, битые даты игнорируются);
+  пагинация 25 с клампом. GET /admin/conversations/{id}/details —
+  сообщения по Message.id ASC включая role="tool" и tool_calls JSON,
+  контент полностью (без обрезки, как в аудите), 404 «Диалог не найден».
+- **RBAC**: admin+engineer (как в заглушке; отличие от аудита — admin-only).
+- **Шаблоны**: pages/conversations.html (4 фильтра), components/
+  conversations/table.html (колонки: #/пользователь/заголовок/создан/
+  обновлён/сообщений; пагинация сохраняет фильтры), details.html
+  (модалка: мета + лента сообщений, бейджи user/assistant/tool,
+  имя инструмента, pre whitespace-pre-wrap, tool_calls отдельным блоком).
+- **Осознанно исключено** (решение 2026-09-04): кнопка «Открыть в чате»
+  и resume диалога в Chainlit (связка thread_id ↔ conversation_id) —
+  отложено до появления маршрута /chat (Фаза 10) и resume-механизма.
+- Тесты: test_admin_ui_conversations.py 30/30 (RBAC-матрица: engineer
+  200 / viewer 403 / без cookie — редирект; фильтры, сортировка,
+  счётчики, пагинация, детали без обрезки, регресс /api/conversations).
+  Регресс: audit 23/23, inventory 31/31, settings 25/25, smoke ok.
+- Верификатор PASS (adversarial: 422 не-числовой id, orphan-диалог →
+  «—», конкурентные GET, XSS-экранирование, idempotent GET).
+- Унаследованное наблюдение (не блокер, из Фазы 4): значения фильтров
+  в пагинации не URL-кодируются (|urlencode) — одновременно в audit и
+  conversations table.html; ломается только на &/=/#/+ в значении.
+
 
 1. **Zabbix 6.2**: токен работает только параметром `auth` в теле JSON-RPC
    (заголовок Authorization: Bearer — не сработал); URL — http, не https;
@@ -359,12 +391,15 @@ build_system_prompt добавляет: текущее время + список
 ## 9. Дорожная карта — что дальше
 
 ### Текущий фокус: миграция UI (migration.md, 16 фаз)
-- Готово: Фазы 0–7 (Этапы 7–9 в §5) — снимок состояния, мок-режим,
+- Готово: Фазы 0–9 (Этапы 7–10 в §5) — снимок состояния, мок-режим,
   /internal/chat/stream, каркас админки /admin/*, контент: инвентарь,
-  аудит, настройки; Chainlit-чат через /internal/chat/stream + авторизация
-  (auth-check для nginx, header-auth, логин-форма).
-- Следующие: Фазы 8–9 (docker-сборка Chainlit, перевод dev-запуска на
-  compose), Фазы 10–16 (nginx auth_request, переезд, прод-сборка Tailwind).
+  аудит, настройки, история диалогов; Chainlit-чат через
+  /internal/chat/stream + авторизация (auth-check для nginx,
+  header-auth, логин-форма).
+- Следующие: Фаза 10 (nginx: auth_request /internal/auth-check для /chat,
+  WebSocket/SSE-заголовки, internal; маршруты /chat), Фазы 11–12 (docker:
+  сервис chainlit в compose, dev-запуск и мок-тестирование), Фазы 13–16
+  (тестирование, замена старого интерфейса, документация, готовность).
 
 ### Ближайший шаг: прямой SNMP для ручных устройств
 - Форма: версия SNMP (v2c community / v3), поля в Device (snmp_version и т.п.).
