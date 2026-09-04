@@ -1,0 +1,63 @@
+{# HTMX-фрагмент: таблица диалогов с пагинацией.
+   Ожидает: entries, total, page, pages, filters (dict). #}
+<div class="bg-white rounded-xl shadow-sm overflow-x-auto">
+    {% if entries %}
+    <table class="w-full text-sm">
+        <thead>
+            <tr class="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-200">
+                <th class="px-3 py-2.5">#</th>
+                <th class="px-3 py-2.5">Пользователь</th>
+                <th class="px-3 py-2.5">Заголовок</th>
+                <th class="px-3 py-2.5">Создан</th>
+                <th class="px-3 py-2.5">Обновлён</th>
+                <th class="px-3 py-2.5">Сообщений</th>
+                <th class="px-3 py-2.5"></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for e in entries %}
+            <tr class="border-b border-slate-100 hover:bg-slate-50">
+                <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ e.id }}</td>
+                <td class="px-3 py-2 whitespace-nowrap">{{ e.username or "—" }}</td>
+                <td class="px-3 py-2 max-w-xs truncate font-medium" title="{{ e.title }}">{{ e.title }}</td>
+                <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ e.created_at_local }}</td>
+                <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ e.updated_at_local }}</td>
+                <td class="px-3 py-2 whitespace-nowrap">{{ e.msg_count }}</td>
+                <td class="px-3 py-2 text-right whitespace-nowrap">
+                    <button class="px-2.5 py-1 rounded-md border border-slate-300 hover:bg-slate-100 text-xs font-medium"
+                            hx-get="/admin/conversations/{{ e.id }}/details"
+                            hx-target="#conv-modal" hx-swap="innerHTML"
+                            onclick="document.getElementById('conv-modal').style.display='flex'">
+                        Детали
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="p-8 text-center text-slate-400">Диалогов нет</div>
+    {% endif %}
+</div>
+
+{# Пагинация: сохраняет текущие фильтры #}
+<div class="flex items-center justify-between mt-3 text-sm text-slate-500">
+    <span>Всего: {{ total }}</span>
+    {% if pages > 1 %}
+    <span class="flex items-center gap-3">
+        {% if page > 1 %}
+        <a href="/admin/conversations/partial/table?{% for k, v in filters.items() %}{% if v %}{{ k }}={{ v }}&amp;{% endif %}{% endfor %}page={{ page - 1 }}"
+           class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100"
+           hx-get="/admin/conversations/partial/table?{% for k, v in filters.items() %}{% if v %}{{ k }}={{ v }}&amp;{% endif %}{% endfor %}page={{ page - 1 }}"
+           hx-target="#conv-table">Назад</a>
+        {% endif %}
+        <span>Страница {{ page }} из {{ pages }}</span>
+        {% if page < pages %}
+        <a href="/admin/conversations/partial/table?{% for k, v in filters.items() %}{% if v %}{{ k }}={{ v }}&amp;{% endif %}{% endfor %}page={{ page + 1 }}"
+           class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100"
+           hx-get="/admin/conversations/partial/table?{% for k, v in filters.items() %}{% if v %}{{ k }}={{ v }}&amp;{% endif %}{% endfor %}page={{ page + 1 }}"
+           hx-target="#conv-table">Вперёд</a>
+        {% endif %}
+    </span>
+    {% endif %}
+</div>

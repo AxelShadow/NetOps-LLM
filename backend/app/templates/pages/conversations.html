@@ -3,9 +3,52 @@
 {% block content %}
 <div class="mb-6">
     <h1 class="text-2xl font-bold">История диалогов</h1>
-    <p class="text-sm text-slate-500">Просмотр диалогов и сообщений</p>
+    <p class="text-sm text-slate-500">Диалоги всех пользователей и их сообщения</p>
 </div>
-<div class="bg-white rounded-xl shadow-sm p-8 text-center text-slate-400">
-    Каркас раздела. История диалогов наполняется в Фазе 4 миграции.
+
+{# Панель фильтров: каждый элемент отправляет значения всех фильтров
+   (hx-include="#conv-filters") на partial/table и заменяет #conv-table #}
+<div id="conv-filters" class="bg-white rounded-xl shadow-sm p-4 mb-4">
+    <div class="grid gap-3 md:grid-cols-4">
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-user">Пользователь</label>
+            <input id="f-user" name="user" type="text" placeholder="логин"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                   hx-get="/admin/conversations/partial/table" hx-trigger="keyup changed delay:300ms"
+                   hx-target="#conv-table" hx-include="#conv-filters">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-q">Заголовок</label>
+            <input id="f-q" name="q" type="text" placeholder="поиск по заголовку"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                   hx-get="/admin/conversations/partial/table" hx-trigger="keyup changed delay:300ms"
+                   hx-target="#conv-table" hx-include="#conv-filters">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-date-from">Дата с</label>
+            <input id="f-date-from" name="date_from" type="date"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                   hx-get="/admin/conversations/partial/table" hx-trigger="change"
+                   hx-target="#conv-table" hx-include="#conv-filters">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="f-date-to">Дата по</label>
+            <input id="f-date-to" name="date_to" type="date"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                   hx-get="/admin/conversations/partial/table" hx-trigger="change"
+                   hx-target="#conv-table" hx-include="#conv-filters">
+        </div>
+    </div>
 </div>
+
+{# Контейнер таблицы: наполняется HTMX при загрузке страницы #}
+<div id="conv-table"
+     hx-get="/admin/conversations/partial/table"
+     hx-trigger="load"
+     hx-include="#conv-filters">
+    <div class="bg-white rounded-xl shadow-sm p-8 text-center text-slate-400">Загрузка…</div>
+</div>
+
+{# Модальное окно диалога: наполняется HTMX (кнопка «Детали» в таблице) #}
+<div id="conv-modal" style="display: contents"></div>
 {% endblock %}

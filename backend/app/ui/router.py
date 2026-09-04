@@ -20,7 +20,8 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db import SessionLocal, get_db
-from ..models import AuditLog, Device, DeviceType, Role, User
+from ..models import AuditLog, Conversation, Device, DeviceType, Message, \
+    Role, User
 from ..auth.ldap_auth import ad_authenticate
 from ..auth.jwt_utils import create_token
 from .deps import COOKIE_NAME, load_user_from_token, get_current_user_page, \
@@ -448,6 +449,156 @@ def audit_details(request: Request,
             "result": log.result or "",
         },
     })
+
+
+# --- Диалоги: HTMX-фрагменты (Фаза 9 миграции) ------------------------------
+
+_CONV_PAGE_SIZE = 25
+
+
+def _conv_query(db: Session, user_f: str | None, q_f: str | None,
+                date_from: datetime | None, date_to: datetime | None):
+    """Список диалогов с агрегатами (join User + count/max по Message).
+
+    «Дата обновления» — время последнего сообщения (MAX(messages.created_at),
+    для пустого диалога — created_at): отдельного столбца в схеме нет,
+    источник истины — текущая БД, без миграций.
+    """
+    last_msg = sa_func.coalesce(sa_func.max(Message.created_at),
+                                Conversation.created_at)
+    q = (
+        db.query(
+            Conversation,
+            User.username,
+            sa_func.count(Message.id).label("msg_count"),
+            last_msg.label("updated_at"),
+        )
+        .outerjoin(User, Conversation.user_id == User.id)
+        .outerjoin(Message, Message.conversation_id == Conversation.id)
+        # User.username в GROUP BY обязателен для Postgres (only_full_group_by)
+        .group_by(Conversation.id, User.username)
+        .order_by(last_msg.desc(), Conversation.id.desc())
+    )
+    if user_f:
+        q = q.filter(User.username.ilike(f"%{user_f}%"))
+    if q_f:
+        q = q.filter(Conversation.title.ilike(f"%{q_f}%"))
+    if date_from:
+        q = q.filter(Conversation.created_at >= date_from)
+    if date_to:
+        # date_to — inclusive: включаем весь указанный день
+        q = q.filter(Conversation.created_at <
+                      datetime.combine(date_to, dtime(hour=23, minute=59,
+                                                       second=59)))
+    return q
+
+
+@router.get("/conversations/partial/table")
+def conversations_table(request: Request,
+                        db: Session = Depends(get_db),
+                        user: User = Depends(require_roles_page(
+                            Role.admin, Role.engineer)),
+                        page: int = Query(default=1, ge=1),
+                        user_f: str | None = Query(default=None, alias="user"),
+                        q_f: str | None = Query(default=None, alias="q"),
+                        date_from: str | None = Query(default=None),
+                        date_to: str | None = Query(default=None)):
+    # input[type=date] шлёт YYYY-MM-DD; битые значения игнорируем
+    try:
+        d_from = datetime.strptime(date_from, "%Y-%m-%d") if date_from else None
+    except ValueError:
+        d_from = None
+    try:
+        d_to = datetime.strptime(date_to, "%Y-%m-%d") if date_to else None
+    except ValueError:
+        d_to = None
+    rows = _conv_query(db, user_f, q_f, d_from, d_to)
+    total = rows.count()
+    pages = max(1, (total + _CONV_PAGE_SIZE - 1) // _CONV_PAGE_SIZE)
+    page = min(page, pages)
+    offset = (page - 1) * _CONV_PAGE_SIZE
+    entries = []
+    for conv, username, msg_count, updated in \
+            rows.offset(offset).limit(_CONV_PAGE_SIZE):
+        created = conv.created_at
+        if created.tzinfo is not None:
+            created = created.astimezone().replace(tzinfo=None)
+        if updated.tzinfo is not None:
+            updated = updated.astimezone().replace(tzinfo=None)
+        entries.append({
+            "id": conv.id,
+            "username": username,
+            "title": conv.title,
+            "created_at_local": created.strftime("%d.%m.%Y %H:%M"),
+            "updated_at_local": updated.strftime("%d.%m.%Y %H:%M"),
+            "msg_count": msg_count,
+        })
+    return templates.TemplateResponse(
+        request, "components/conversations/table.html", {
+            "request": request,
+            "entries": entries,
+            "total": total,
+            "page": page,
+            "pages": pages,
+            "filters": {
+                "user": user_f or "",
+                "q": q_f or "",
+                "date_from": date_from or "",
+                "date_to": date_to or "",
+            },
+        })
+
+
+@router.get("/conversations/{conv_id}/details")
+def conversation_details(request: Request,
+                         conv_id: int,
+                         db: Session = Depends(get_db),
+                         user: User = Depends(require_roles_page(
+                             Role.admin, Role.engineer))):
+    row = (
+        db.query(Conversation, User.username)
+        .outerjoin(User, Conversation.user_id == User.id)
+        .filter(Conversation.id == conv_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Диалог не найден")
+    conv, username = row
+    msgs = (db.query(Message)
+            .filter(Message.conversation_id == conv_id)
+            .order_by(Message.id.asc())
+            .all())
+    created = conv.created_at
+    if created.tzinfo is not None:
+        created = created.astimezone().replace(tzinfo=None)
+    updated = max((m.created_at for m in msgs), default=conv.created_at)
+    if updated.tzinfo is not None:
+        updated = updated.astimezone().replace(tzinfo=None)
+    messages = []
+    for m in msgs:
+        m_created = m.created_at
+        if m_created.tzinfo is not None:
+            m_created = m_created.astimezone().replace(tzinfo=None)
+        messages.append({
+            "role": m.role,
+            "name": m.name or "",
+            "tool_calls": m.tool_calls or "",
+            "content": m.content,
+            "created_at_local": m_created.strftime("%d.%m.%Y %H:%M:%S"),
+        })
+    return templates.TemplateResponse(
+        request, "components/conversations/details.html", {
+            "request": request,
+            "e": {
+                "id": conv.id,
+                "username": username,
+                "title": conv.title,
+                "created_at_local": created.strftime("%d.%m.%Y %H:%M:%S"),
+                "updated_at_local": updated.strftime("%d.%m.%Y %H:%M:%S"),
+                "msg_count": len(msgs),
+            },
+            "messages": messages,
+        })
 
 
 # 401/403 обрабатываются на уровне приложения (main.py): FastAPI не
