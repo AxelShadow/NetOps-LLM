@@ -95,8 +95,9 @@ def login(creds: LoginIn):
 
 @router.get("/auth/me")
 def me(user: User = Depends(get_current_user)):
-    return {"username": user.username, "display_name": user.display_name,
-            "role": user.role.value}
+    # id нужен логин-форме Chainlit (Фаза 7) для заголовка X-User-Id
+    return {"id": user.id, "username": user.username,
+            "display_name": user.display_name, "role": user.role.value}
 
 
 # ---------- управление доступом (только админ) ----------

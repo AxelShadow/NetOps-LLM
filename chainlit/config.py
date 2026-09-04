@@ -25,15 +25,6 @@ class Config:
         self.proxy_auth_secret: str = os.getenv("NETOPS_PROXY_AUTH_SECRET", "")
         # dev | production. CHAINLIT_HOST/CHAINLIT_PORT читает сам chainlit-cli.
         self.environment: str = os.getenv("ENVIRONMENT", "development")
-        # Фаза 6 (только dev): user_id-заглушка до появления авторизации (Фаза 7).
-        try:
-            self.dev_user_id: int = int(os.getenv("CHAINLIT_DEV_USER_ID", "1"))
-        except ValueError:
-            raise RuntimeError("CHAINLIT_DEV_USER_ID должен быть числом (id пользователя из БД)")
-        if self.environment != "development":
-            raise RuntimeError(
-                "CHAINLIT_DEV_USER_ID допустим только при ENVIRONMENT=development; "
-                "в production используйте авторизацию (Фаза 7)")
 
     @staticmethod
     def _req(name: str) -> str:

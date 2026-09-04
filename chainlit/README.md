@@ -5,9 +5,10 @@ Chat-UI инфраструктурного ассистента. Только ч
 внутреннего API `POST /internal/chat/stream` и **не обращается** к LM Studio,
 Zabbix или VMware напрямую (запрещено migration.md).
 
-**Статус: Фаза 6 (скелет, dev).** До Фазы 7 (авторизация) в прод не пускать:
-user_id приходит из `CHAINLIT_DEV_USER_ID` и работает только при
-`ENVIRONMENT=development`.
+**Статус: Фаза 7 (авторизация).** Вход: логин-форма (всегда) или
+header-auth от nginx (Фаза 10, при заданном `NETOPS_PROXY_AUTH_SECRET`).
+Анонимный доступ невозможен: без валидного пользователя chainlit не
+пускает в чат. Диалоги хранятся только в БД FastAPI.
 
 ## Файлы
 
@@ -17,7 +18,7 @@ user_id приходит из `CHAINLIT_DEV_USER_ID` и работает тол�
 | `client.py` | HTTP-клиент + SSE-парсер (`stream_chat`, `parse_sse_line`); НЕ импортирует chainlit |
 | `adapters.py` | SSE-события → UI: `delta`→Message, `tool`/`tool_result`→Step (✔/✖) |
 | `config.py` | env-конфиг (fail-fast), без зависимостей |
-| `auth.py` | Фаза 7: header-auth (nginx) + логин-форма |
+| `auth.py` | Фаза 7: header-auth (nginx) + логин-форма через /api/auth/* |
 | `sse_parser_test.py` | Тест парсера и `stream_chat` (без chainlit, MockTransport) |
 
 ## Переменные окружения
@@ -26,9 +27,8 @@ user_id приходит из `CHAINLIT_DEV_USER_ID` и работает тол�
 |---|---|---|
 | `FASTAPI_INTERNAL_URL` | да | База FastAPI, напр. `http://localhost:8000` |
 | `NETOPS_INTERNAL_SERVICE_TOKEN` | да | Сервисный токен `/internal/*` (= бэкенд). Server-to-server, в браузер не попадает |
-| `NETOPS_PROXY_AUTH_SECRET` | нет | Секрет proxy-авторизации (Фаза 7). Пусто = header-режим выключен, работает логин-форма |
+| `NETOPS_PROXY_AUTH_SECRET` | нет | Секрет proxy-авторизации (Фаза 7/10). Пусто = header-режим выключен, работает логин-форма |
 | `ENVIRONMENT` | нет | `development` (дефолт) / `production` |
-| `CHAINLIT_DEV_USER_ID` | нет | Только Фаза 6 + development: заглушка user_id (id из БД, обычно 1) |
 | `CHAINLIT_HOST` / `CHAINLIT_PORT` | нет | Читает chainlit-cli (дефолт 127.0.0.1:8000); в Docker — 0.0.0.0:8001 |
 | `CHAINLIT_AUTH_SECRET` | да | Подпись cookies Chainlit: `chainlit create-secret` |
 
@@ -49,7 +49,7 @@ NETOPS_INTERNAL_SERVICE_TOKEN=dev-token \
 # 3. chainlit
 cd E:/netops-llm/chainlit
 FASTAPI_INTERNAL_URL=http://localhost:8000 NETOPS_INTERNAL_SERVICE_TOKEN=dev-token \
-ENVIRONMENT=development CHAINLIT_DEV_USER_ID=1 \
+ENVIRONMENT=development \
 .venv/Scripts/chainlit run app.py
 ```
 

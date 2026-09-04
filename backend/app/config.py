@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # Сервисный токен для /internal/* (пусто = внутренние маршруты выключены)
     internal_service_token: str = Field(default="",
                                         env="NETOPS_INTERNAL_SERVICE_TOKEN")
+    # Секрет proxy-авторизации для auth-check (пусто = header-режим
+    # Chainlit выключен, работает только логин-форма)
+    proxy_auth_secret: str = ""
 
 
 @lru_cache

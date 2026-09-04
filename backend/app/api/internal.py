@@ -8,14 +8,17 @@
 При пустом NETOPS_INTERNAL_SERVICE_TOKEN все /internal/*-маршруты выключены.
 """
 import secrets
-from fastapi import APIRouter, Depends, Header, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+import jwt as pyjwt
 from ..db import get_db
 from ..models import User, Conversation
 from ..config import get_settings
+from ..auth.jwt_utils import decode_token
+from ..ui.deps import COOKIE_NAME
 from .chat import run_agent_cycle
 
 router = APIRouter(prefix="/internal")
@@ -44,6 +47,43 @@ def _load_user_by_id(x_user_id: str | None = Header(default=None),
     if not user or not user.is_active:
         raise HTTPException(403, "Пользователь не найден или отключён")
     return user
+
+
+def _user_headers(user: User) -> dict[str, str]:
+    """Заголовки пользователя для nginx auth_request (Фаза 7/10)."""
+    return {"X-User-Id": str(user.id),
+            "X-User-Email": user.username,
+            "X-User-Role": user.role.value,
+            "X-User-Display-Name": user.display_name or ""}
+
+
+@router.get("/auth-check",
+            dependencies=[Depends(_check_service_token)])
+def internal_auth_check(request: Request, db: Session = Depends(get_db)):
+    """Проверка сессии для nginx auth_request (Фаза 7/10).
+
+    Токен — из cookie netops_token или Authorization: Bearer (curl/тесты).
+    204 + заголовки пользователя, 401 — нет/невалиден, 403 — отключён.
+    load_user_from_token здесь не годится: он не различает невалидный JWT
+    (401) и деактивированного пользователя (403).
+    """
+    token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[len("Bearer "):]
+    if not token:
+        raise HTTPException(401, "Нет токена")
+    try:
+        payload = decode_token(token)
+    except pyjwt.PyJWTError:
+        raise HTTPException(401, "Недействительный токен")
+    user = db.get(User, int(payload["sub"]))
+    if not user:
+        raise HTTPException(401, "Пользователь не найден")
+    if not user.is_active:
+        raise HTTPException(403, "Пользователь отключён")
+    return Response(status_code=204, headers=_user_headers(user))
 
 
 @router.post("/chat/stream",

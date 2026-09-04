@@ -1,23 +1,26 @@
 """NetOps-LLM чат: Chainlit UI -> FastAPI /internal/chat/stream.
 
-Фаза 6: dev-заглушка user_id (CHAINLIT_DEV_USER_ID); авторизация — Фаза 7.
-Диалоги хранятся ТОЛЬКО в БД FastAPI: conversation_id берём из заголовка
-X-Conversation-Id и держим в cl.user_session.
+Фаза 7: авторизация (auth.py — header-auth по секрету прокси или
+логин-форма). Диалоги хранятся ТОЛЬКО в БД FastAPI: conversation_id
+берём из заголовка X-Conversation-Id и держим в cl.user_session.
 """
 import chainlit as cl
 
 import adapters
+import auth  # noqa: F401 — регистрирует колбэки login/header-auth
 from client import BackendError, stream_chat
-from config import config
 
 
 @cl.on_chat_start
 async def on_chat_start() -> None:
     """Новая сессия чата: диалог ещё не создан."""
     cl.user_session.set("conversation_id", None)
-    # Фаза 6 (только ENVIRONMENT=development): заглушка user_id.
-    # Фаза 7 заменит на user из cl.user_session.
-    cl.user_session.set("user_id", config.dev_user_id)
+    user = cl.user_session.get("user")
+    if user is None:
+        # Теоретически недостижимо (chainlit не пускает анонимов),
+        # но без user_id чат работать не может.
+        raise ValueError("Сессия без авторизации")
+    cl.user_session.set("user_id", user.metadata["user_id"])
     await cl.Message(content="Задайте вопрос по инфраструктуре.").send()
 
 

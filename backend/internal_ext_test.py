@@ -50,6 +50,8 @@ def main():
         with SessionLocal() as db:
             admin = db.query(User).filter_by(role="admin").first()
             admin_id = admin.id
+            admin_username = admin.username
+            admin_display_name = admin.display_name
 
         headers_ok = {"X-Internal-Service-Token": "test-token",
                       "X-User-Id": str(admin_id)}
@@ -93,6 +95,74 @@ def main():
               f"got {r.status_code}")
         check("4: заголовка нет при 404",
               "x-conversation-id" not in r.headers)
+
+        # ---------- Фаза 7a: /internal/auth-check + /me id ----------
+
+        def auth_check(headers=None, cookies=None):
+            return client.get("/internal/auth-check",
+                              headers=headers, cookies=cookies)
+
+        # (5) без сервисного токена -> 401
+        r = auth_check()
+        check("5: auth-check без сервисного токена -> 401",
+              r.status_code == 401, f"got {r.status_code}")
+
+        # (6) с токеном, без пользовательского токена -> 401
+        r = auth_check(headers={"X-Internal-Service-Token": "test-token"})
+        check("6: auth-check без cookie/Bearer -> 401",
+              r.status_code == 401, f"got {r.status_code}")
+
+        # (7) garbage-токен -> 401
+        r = auth_check(headers={"X-Internal-Service-Token": "test-token",
+                                "Authorization": "Bearer garbage"})
+        check("7: auth-check garbage-токен -> 401",
+              r.status_code == 401, f"got {r.status_code}")
+
+        # (8) валидный Bearer -> 204 + все 4 заголовка
+        r = auth_check(headers={"X-Internal-Service-Token": "test-token",
+                                "Authorization": f"Bearer {token}"})
+        check("8: auth-check Bearer -> 204", r.status_code == 204,
+              f"got {r.status_code} {r.text[:200]}")
+        check("8: все 4 заголовка пользователя",
+              r.headers.get("x-user-id") == str(admin_id)
+              and r.headers.get("x-user-email") == admin_username
+              and r.headers.get("x-user-role") == "admin"
+              and r.headers.get("x-user-display-name") == admin_display_name,
+              f"id={r.headers.get('x-user-id')!r} "
+              f"email={r.headers.get('x-user-email')!r} "
+              f"role={r.headers.get('x-user-role')!r} "
+              f"dn={r.headers.get('x-user-display-name')!r}")
+
+        # (9) валидная cookie netops_token -> 204
+        r = auth_check(headers={"X-Internal-Service-Token": "test-token"},
+                       cookies={"netops_token": token})
+        check("9: auth-check cookie -> 204", r.status_code == 204,
+              f"got {r.status_code}")
+
+        # (10) деактивированный юзер -> 403 (потом восстановить)
+        with SessionLocal() as db:
+            db.get(User, admin_id).is_active = False
+            db.commit()
+        r = auth_check(headers={"X-Internal-Service-Token": "test-token",
+                                "Authorization": f"Bearer {token}"})
+        check("10: auth-check деактивированный -> 403",
+              r.status_code == 403, f"got {r.status_code}")
+        with SessionLocal() as db:
+            db.get(User, admin_id).is_active = True
+            db.commit()
+
+        # (11) /api/auth/me возвращает id == admin_id
+        r = client.get("/api/auth/me",
+                       headers={"Authorization": f"Bearer {token}"})
+        check("11: /me возвращает id", r.status_code == 200
+              and r.json().get("id") == admin_id,
+              f"got {r.status_code} {r.text[:200]}")
+
+        # (12) набор полей /me == {id, username, display_name, role}
+        check("12: /me поля == {id, username, display_name, role}",
+              set(r.json().keys()) == {"id", "username", "display_name",
+                                      "role"},
+              f"keys={sorted(r.json().keys())}")
 
     print(f"\nИтого: PASS={PASS} FAIL={FAIL}")
     sys.exit(0 if FAIL == 0 else 1)
