@@ -223,6 +223,42 @@ netops-llm/
   (в сессии верификатора Bash был заблокирован правами).
 - Регресс после Фазы 5: инвентарь 31/31, аудит 23/23 — зелёные.
 
+### Этап 9 — миграция UI, Фазы 6–7: Chainlit-чат + авторизация (готово, 2026-09-04)
+Отдельное приложение chainlit/ — тонкий клиент внутреннего API; FastAPI
+остаётся единственным источником бизнес-логики/RBAC/аудита.
+- **Фаза 6 — скелет чата (714ad49)**: app.py (conversation_id в
+  cl.user_session, id диалога из response-заголовка), client.py (SSE-парсер
+  без импорта chainlit + stream_chat: 401/403/413/обрыв -> дружественные
+  BackendError, ровно один автоповтор на 404), adapters.py (delta ->
+  Message, tool/tool_result -> Step ✔/✖), config.py fail-fast; тесты:
+  sse_parser_test.py 17/17 (парсер + MockTransport), internal_ext_test.py
+  7/7 (заголовок X-Conversation-Id, продолжение диалога, 404 чужого).
+  Backend: X-Conversation-Id в StreamingResponse /internal/chat/stream.
+  Гэп «id нового диалога не возвращается» закрыт аддитивным заголовком.
+- **Фаза 7 — авторизация (402be6c)**: GET /internal/auth-check для nginx
+  auth_request (Фаза 10): сервисный токен + JWT (cookie netops_token или
+  Bearer) -> 204 + X-User-Id/Email/Role/Display-Name, 401 нет/невалиден,
+  403 отключён. load_user_from_token не различает невалидный JWT и
+  деактивированного (везде None) — поэтому decode_token + явные проверки.
+  /api/auth/me отдаёт id (логин-форме Chainlit нужен X-User-Id).
+  chainlit/auth.py: header_auth по X-Proxy-Auth-Secret
+  (secrets.compare_digest; пустой секрет/заголовок -> header-режим
+  выключен) + password_auth (login -> JWT -> /me; пароль не логируется,
+  JWT не сохраняется, умирает в колбэке); app.py берёт user_id из
+  metadata сессии; dev-заглушка CHAINLIT_DEV_USER_ID удалена.
+  internal_ext_test.py расширен до 16 чеков.
+- Живой смоук (uvicorn + chainlit, dev/mock): логин-форма -> cookie
+  access_token -> User(id=1, role=admin); auth-check: Bearer и cookie
+  -> 204 + 4 заголовка, мусорный токен -> 401, деактивированный -> 403;
+  header_auth 4/4 сценария; viewer проходит; в логах нет паролей/токенов.
+- Верификация: два субагента (Фаза 6, Фаза 7) — PASS: все тесты, adversarial
+  (подделанные JWT: sub=999/exp-в-прошлом/неверная-подпись -> 401),
+  git-гигиена (.venv/.files/translations покрыты .gitignore).
+- Известные мелочи (не блокеры): JWT с нечисловым sub даёт 500 (унаследованный
+  паттерн из auth/deps.py, недостижим без секретного ключа); dev-режим
+  авто-регистрирует *@ad_domain (дизайн NETOPS_DEV_MODE); X-User-Email
+  несёт username из БД (bootstrap-админ хранится как "admin" без домена).
+
 ## 6. Выученные грабли (важно!)
 
 1. **Zabbix 6.2**: токен работает только параметром `auth` в теле JSON-RPC
@@ -323,12 +359,12 @@ build_system_prompt добавляет: текущее время + список
 ## 9. Дорожная карта — что дальше
 
 ### Текущий фокус: миграция UI (migration.md, 16 фаз)
-- Готово: Фазы 0–5 (Этапы 7–8 в §5) — снимок состояния, мок-режим,
+- Готово: Фазы 0–7 (Этапы 7–9 в §5) — снимок состояния, мок-режим,
   /internal/chat/stream, каркас админки /admin/*, контент: инвентарь,
-  аудит, настройки.
-- Следующие: Фазы 6–9 (Chainlit-чат: UI чата переезжает со старого SPA
-  на Chainlit через /internal/chat/stream), Фазы 10–16 (nginx,
-  docker compose, переезд, прод-сборка Tailwind).
+  аудит, настройки; Chainlit-чат через /internal/chat/stream + авторизация
+  (auth-check для nginx, header-auth, логин-форма).
+- Следующие: Фазы 8–9 (docker-сборка Chainlit, перевод dev-запуска на
+  compose), Фазы 10–16 (nginx auth_request, переезд, прод-сборка Tailwind).
 
 ### Ближайший шаг: прямой SNMP для ручных устройств
 - Форма: версия SNMP (v2c community / v3), поля в Device (snmp_version и т.п.).
