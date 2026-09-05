@@ -15,14 +15,41 @@ services:
     depends_on: [db]
     restart: unless-stopped
 
+  # Чат-приложение Chainlit (Фаза 11). Тонкий клиент FastAPI
+  # /internal/chat/stream; своих диалогов не хранит.
+  chainlit:
+    build: ./chainlit
+    environment:
+      FASTAPI_INTERNAL_URL: http://app:8000
+      CHAINLIT_ROOT_PATH: /chat        # nginx проксирует /chat -> :8001
+      CHAINLIT_AUTH_SECRET: ${CHAINLIT_AUTH_SECRET:?задайте в .env (см. chainlit create-secret)}
+      # :? — config.py падает при пустом токене; fail-fast на старте
+      NETOPS_INTERNAL_SERVICE_TOKEN: ${NETOPS_INTERNAL_SERVICE_TOKEN:?задайте в .env}
+      NETOPS_PROXY_AUTH_SECRET: ${NETOPS_PROXY_AUTH_SECRET:-}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+    depends_on: [app]
+    restart: unless-stopped
+    healthcheck:
+      # curl в slim-образе нет; /health у chainlit под root_path-префиксом
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/chat/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   web:
     image: nginx:alpine
     ports:
       - "8080:80"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Шаблон прогоняется entrypoint-скриптом nginx через envsubst:
+      # переменные NETOPS_* берутся из environment ниже.
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
       - ./frontend:/usr/share/nginx/html:ro
-    depends_on: [app]
+    environment:
+      NETOPS_INTERNAL_SERVICE_TOKEN: ${NETOPS_INTERNAL_SERVICE_TOKEN:-}
+      NETOPS_PROXY_AUTH_SECRET: ${NETOPS_PROXY_AUTH_SECRET:-}
+    depends_on: [app, chainlit]
     restart: unless-stopped
 
 volumes:
