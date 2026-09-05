@@ -340,6 +340,34 @@ auth_request, всё в docker-compose. Backend — единственный и�
 - Live-проверка compose up / nginx / WebSocket — отложена на сервер
   (Docker Desktop не поднимали).
 
+### Этап 12 — техдолг: FIX-01 + FIX-02 (готово, 2026-09-05)
+- **FIX-01, мок-режим (1fd555b)**: перехват мок-режима уже существовал
+  в wrapper реестра (RBAC до диспетчеризации, аудит после) — дублирующий
+  перехват в execute_tool не потребовался. Единственный дефект исправлен:
+  статический `from .mock import MOCK_TOOLS` заменён ленивым внутри
+  ветки `if settings.mock_mode` — mock.py не загружается в проде.
+  tests/test_mock_mode.py (pytest, временная sqlite): 15 моков = реестру,
+  ping → фейковый 192.0.2.10 + аудит ok, маркер 'mock-ошибка' →
+  status=error, vmware_vms → 4 ВМ (srv-app-01). requirements-dev.txt:
+  +httpx, python-multipart, pytest.
+- **FIX-02, retry/таймауты chainlit-клиента (коммит ниже)**:
+  tenacity>=8.2.0,<9 в requirements (venv: 8.5.0; downgrade с
+  транзитивной 9.1.4 безопасен — 9.x нужен chainlit только в tests-extra).
+  stream_chat: retry ТОЛЬКО фазы подключения (обычная функция _open(),
+  не генератор — tenacity не видит исключений итерации): 3 попытки,
+  backoff 2→10с, ретраятся Connect/Read/Write/Pool/Network + 5xx;
+  401/413/404/4xx не ретраятся; 404-автоповтор сохранён. Таймауты:
+  connect 10с, read 60с между SSE-кадрами (было read=None — вечное
+  ожидание), общий 300с на стрим (asyncio.timeout → AGENT_TIMEOUT).
+  Обрыв ПОСЛЕ первого события не ретраится (дубли сообщений в БД) →
+  STREAM_INTERRUPTED. Сетевой отказ после retry → NETWORK_ERROR
+  «Не удалось соединиться с сервером». Тесты sse_parser_test.py
+  12+9: m6 ошибка×2→успех на 3-й, m7 все retry пали → NETWORK_ERROR,
+  m8 вечный стрим → AGENT_TIMEOUT, m9 503→retry→успех. Верификатор
+  PASS: остановленный backend → сообщение за ~11с (не вечный лоадер);
+  adversarial: mid-stream ReadTimeout не ретраится (0 дублей), 401 —
+  1 вызов (не жжёт попытки), конкурентные вызовы не делят retry-состояние.
+
 1. **Zabbix 6.2**: токен работает только параметром `auth` в теле JSON-RPC
    (заголовок Authorization: Bearer — не сработал); URL — http, не https;
    sortfield "clock" у problem.get запрещён; selectHosts у problem.get молча
