@@ -8,13 +8,19 @@ SSE-контракт (backend/app/api/chat.py, run_agent_cycle): кадры
 `data: {json}\\n\\n` без имён событий; ключи delta / tool / tool_result /
 error; терминатор `data: [DONE]` (не JSON).
 """
+import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
 
 import httpx
+from tenacity import (AsyncRetrying, retry_if_exception_type,
+                       stop_after_attempt, wait_exponential)
 
 from config import config
+
+log = logging.getLogger(__name__)
 
 
 # ----- дружественные ошибки (без внутренней информации) -----
@@ -26,6 +32,39 @@ UNAUTHORIZED = ("Пользовательская сессия недейств�
 REQUEST_TOO_LONG = "Запрос слишком объёмный — попробуйте сократить сообщение."
 STREAM_INTERRUPTED = ("Ответ оборвался. Сообщение сохранено, "
                       "можно продолжить.")
+NETWORK_ERROR = ("Не удалось соединиться с сервером. "
+                 "Проверьте подключение или обратитесь к администратору.")
+AGENT_TIMEOUT = ("Агент слишком долго не отвечает. "
+                 "Попробуйте упростить запрос или разбить его на части.")
+
+# ----- таймауты / retry (Фаза 6, FIX-02) -----
+
+CONNECT_TIMEOUT = 10.0        # установка TCP-соединения
+READ_TIMEOUT = 60.0           # между SSE-кадрами: агент может думать
+TOTAL_STREAM_TIMEOUT = 300.0   # весь стрим, агентский цикл (FastAPI лимит 20 шагов)
+
+RETRY_ATTEMPTS = 3
+RETRY_WAIT_MIN = 2.0          # backoff-пауза между попытками (тесты выставляют 0)
+RETRY_WAIT_MAX = 10.0
+
+# 5xx на установке соединения — ретраим как сетевую ошибку (FIX-02)
+class _RetryableHTTPStatus(Exception):
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+
+
+# Сетевые ошибки, которые стоит ретраить на ФАЗЕ ПОДКЛЮЧЕНИЯ.
+# Обрыв посреди стрима (после первого события) НЕ ретраится:
+# сообщение уже обработано FastAPI, повтор даст дубли в БД/аудите.
+_RETRYABLE_NETWORK_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+    httpx.NetworkError,
+)
 
 
 class BackendError(Exception):
@@ -111,38 +150,95 @@ async def stream_chat(
         payload = {"content": content, "conversation_id": conv, "model": model}
         headers = {"X-Internal-Service-Token": config.internal_service_token,
                    "X-User-Id": str(user_id)}
-        # read=None: SSE — бесконечный поток, агент может думать минутами.
-        timeout = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=30.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream(
+
+        async def _open() -> tuple[httpx.AsyncClient, httpx.Response]:
+            """Открыть стрим: retry только на фазе подключения (tenacity).
+
+            Обычная (не генератор) функция — исключения здесь видны
+            tenacity. Константы читаются на момент вызова, тесты их
+            подменяют. BackendError (401/413/4xx) не ретраится.
+            """
+            timeout = httpx.Timeout(connect=CONNECT_TIMEOUT,
+                                    read=READ_TIMEOUT, write=30.0, pool=30.0)
+            client = httpx.AsyncClient(timeout=timeout)
+            try:
+                req = client.build_request(
                     "POST",
                     f"{config.fastapi_internal_url}/internal/chat/stream",
-                    json=payload, headers=headers) as resp:
-                if resp.status_code in (401, 403):
-                    raise BackendError(UNAUTHORIZED)
-                if resp.status_code == 404 and retry_on_404:
-                    return
-                if resp.status_code == 413:
-                    raise BackendError(REQUEST_TOO_LONG)
-                if resp.status_code >= 400:
-                    raise BackendError(SERVICE_UNAVAILABLE)
-                raw_conv = resp.headers.get("x-conversation-id", "")
-                conv_id = int(raw_conv) if raw_conv.isdigit() else None
-                buf: dict = {"data": []}
-                reported = False
-                got_done = False
-                async for line in resp.aiter_lines():
-                    ev = parse_sse_line(line, buf)
-                    if ev is None:
-                        continue
-                    yield (conv_id if not reported else None), ev
-                    reported = True
-                    if ev.kind == "done":
-                        got_done = True
-                        return
-                if not got_done:
-                    # тело кончилось без [DONE] — обрыв посреди ответа
-                    raise BackendError(STREAM_INTERRUPTED)
+                    json=payload, headers=headers)
+                resp = await client.send(req, stream=True)
+            except BaseException:
+                await client.aclose()
+                raise
+            if resp.status_code in (401, 403):
+                await resp.aclose()
+                await client.aclose()
+                raise BackendError(UNAUTHORIZED)
+            if resp.status_code == 413:
+                await resp.aclose()
+                await client.aclose()
+                raise BackendError(REQUEST_TOO_LONG)
+            if resp.status_code >= 500:
+                # FastAPI упал/перезапускается: ретраим (цель FIX-02 —
+                # не показывать вечный лоадер при кратных сбоях backend)
+                await resp.aclose()
+                await client.aclose()
+                raise _RetryableHTTPStatus(resp.status_code)
+            # 404 не считаем ошибкой: разбор ниже, наружная логика
+            # делает автоповтор с conversation_id=None
+            if resp.status_code >= 400 and resp.status_code != 404:
+                await resp.aclose()
+                await client.aclose()
+                raise BackendError(SERVICE_UNAVAILABLE)
+            return client, resp
+
+        # Retry фазы подключения: 3 попытки, экспоненциальный backoff.
+        # AsyncRetrying создаётся на вызов — константы подменяемы тестами.
+        async for attempt in AsyncRetrying(
+            stop=stop_after_attempt(RETRY_ATTEMPTS),
+            wait=wait_exponential(multiplier=1, min=RETRY_WAIT_MIN,
+                                 max=RETRY_WAIT_MAX),
+            retry=retry_if_exception_type(
+                _RETRYABLE_NETWORK_ERRORS + (_RetryableHTTPStatus,)),
+            reraise=True,
+        ):
+            with attempt:
+                client, resp = await _open()
+
+        try:
+            # стрим уже открыт в _open() (client.send); закрываем всё в finally
+            if resp.status_code == 404 and retry_on_404:
+                # молча: наружу сигнал «нет событий» -> один повтор
+                # с conversation_id=None
+                return
+            raw_conv = resp.headers.get("x-conversation-id", "")
+            conv_id = int(raw_conv) if raw_conv.isdigit() else None
+            buf: dict = {"data": []}
+            reported = False
+            got_done = False
+            # Общий таймаут на весь стрим: агентский цикл ограничен
+            # 20 шагами, дольше 300с ответ не придёт — не ждём вечно.
+            try:
+                async with asyncio.timeout(TOTAL_STREAM_TIMEOUT):
+                    async for line in resp.aiter_lines():
+                        ev = parse_sse_line(line, buf)
+                        if ev is None:
+                            continue
+                        yield (conv_id if not reported else None), ev
+                        reported = True
+                        if ev.kind == "done":
+                            got_done = True
+                            return
+            except asyncio.TimeoutError:
+                log.warning("stream timeout after %.0fs (conv=%s)",
+                            TOTAL_STREAM_TIMEOUT, conv)
+                raise BackendError(AGENT_TIMEOUT)
+            if not got_done:
+                # тело кончилось без [DONE] — обрыв посреди ответа
+                raise BackendError(STREAM_INTERRUPTED)
+        finally:
+            await resp.aclose()
+            await client.aclose()
 
     got_any = False
     try:
@@ -151,8 +247,13 @@ async def stream_chat(
             yield item
     except BackendError:
         raise
-    except httpx.HTTPError:
+    except _RetryableHTTPStatus:
+        # попытки исчерпаны: FastAPI не поднялся за 3 retry
         raise BackendError(SERVICE_UNAVAILABLE)
+    except httpx.HTTPError:
+        # сетевая ошибка после исчерпания retry (или обрыв после
+        # первого события): ретраить стрим нельзя — дубли в БД
+        raise BackendError(STREAM_INTERRUPTED if got_any else NETWORK_ERROR)
     if got_any:
         return
 
@@ -162,5 +263,7 @@ async def stream_chat(
             yield item
     except BackendError:
         raise
+    except _RetryableHTTPStatus:
+        raise BackendError(SERVICE_UNAVAILABLE)
     except httpx.HTTPError:
         raise BackendError(SERVICE_UNAVAILABLE)

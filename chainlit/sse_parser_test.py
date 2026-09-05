@@ -248,6 +248,156 @@ def test_stream_mock():
     check("m5: обрыв без [DONE] -> STREAM_INTERRUPTED",
           msg == client.STREAM_INTERRUPTED, f"got {msg!r}")
 
+    # ---- FIX-02: retry-логика и таймауты ----
+
+    def _patch_transport(handler):
+        """PatchedClient: подменяет httpx.AsyncClient на MockTransport."""
+        orig = httpx.AsyncClient
+        transport = httpx.MockTransport(handler)
+
+        class PatchedClient(orig):
+            def __init__(self, *a, **kw):
+                kw["transport"] = transport
+                super().__init__(*a, **kw)
+
+        return orig, PatchedClient
+
+    # m6: сетевая ошибка на 1-й и 2-й попытке -> успех на 3-й
+    state = {"n": 0}
+
+    def h_flaky(request):
+        state["n"] += 1
+        if state["n"] <= 2:
+            raise httpx.ConnectError("connection refused")
+        return httpx.Response(200, headers={
+            "Content-Type": "text/event-stream",
+            "X-Conversation-Id": "9"},
+            content=SSE_BODY.encode("utf-8"))
+
+    async def run_flaky():
+        orig, patched = _patch_transport(h_flaky)
+        httpx.AsyncClient = patched
+        try:
+            got = []
+            async for conv, e in client.stream_chat("x", None, 1):
+                got.append((conv, e.kind))
+            return got
+        finally:
+            httpx.AsyncClient = orig
+
+    saved = (client.RETRY_WAIT_MIN, client.RETRY_WAIT_MAX)
+    client.RETRY_WAIT_MIN = 0.0
+    client.RETRY_WAIT_MAX = 0.0
+    try:
+        got = asyncio.run(run_flaky())
+    finally:
+        client.RETRY_WAIT_MIN, client.RETRY_WAIT_MAX = saved
+    check("m6: сетевая ошибка x2 -> успех на 3-й попытке",
+          [k for _, k in got] == ["delta", "tool", "tool_result", "delta", "done"]
+          and state["n"] == 3 and got[0][0] == 9,
+          f"n={state['n']} kinds={[k for _, k in got]}")
+
+    # m7: все попытки падают -> NETWORK_ERROR (критерий готовности FIX-02)
+    def h_dead(request):
+        raise httpx.ConnectError("backend is down")
+
+    async def run_dead():
+        orig, patched = _patch_transport(h_dead)
+        httpx.AsyncClient = patched
+        try:
+            async for _ in client.stream_chat("x", None, 1):
+                pass
+        except BackendError as e:
+            return e.user_message
+        finally:
+            httpx.AsyncClient = orig
+        return None
+
+    client.RETRY_WAIT_MIN = 0.0
+    client.RETRY_WAIT_MAX = 0.0
+    try:
+        msg = asyncio.run(run_dead())
+    finally:
+        client.RETRY_WAIT_MIN, client.RETRY_WAIT_MAX = saved
+    check("m7: все retry исчерпаны -> NETWORK_ERROR",
+          msg == client.NETWORK_ERROR, f"got {msg!r}")
+
+    # m8: общий таймаут стрима -> BackendError(AGENT_TIMEOUT)
+    async def h_slow_forever(request):
+        """События идут, но [DONE] никогда не приходит.
+
+        aiter_lines() у ответа зациклен: стрим никогда не иссякает,
+        пока asyncio.timeout не погасит его на 0.1с.
+        """
+        resp = httpx.Response(200, headers={
+            "Content-Type": "text/event-stream",
+            "X-Conversation-Id": "11"},
+            content='data: {"delta": "думаю..."}\n\n'.encode("utf-8"))
+
+        async def endless_lines():
+            while True:
+                yield 'data: {"delta": "думаю..."}'
+                yield ""
+                await asyncio.sleep(0.5)
+
+        resp.aiter_lines = endless_lines  # type: ignore[method-assign]
+        return resp
+
+    async def run_slow():
+        orig, patched = _patch_transport(h_slow_forever)
+        httpx.AsyncClient = patched
+        try:
+            async for _ in client.stream_chat("x", None, 1):
+                pass
+        except BackendError as e:
+            return e.user_message
+        finally:
+            httpx.AsyncClient = orig
+        return None
+
+    saved_t = client.TOTAL_STREAM_TIMEOUT
+    client.TOTAL_STREAM_TIMEOUT = 0.1
+    try:
+        msg = asyncio.run(run_slow())
+    finally:
+        client.TOTAL_STREAM_TIMEOUT = saved_t
+    check("m8: таймаут стрима -> AGENT_TIMEOUT",
+          msg == client.AGENT_TIMEOUT, f"got {msg!r}")
+
+    # m9: 503 на подключении ретраится (FastAPI кратко упал)
+    state503 = {"n": 0}
+
+    def h_503_then_ok(request):
+        state503["n"] += 1
+        if state503["n"] == 1:
+            return httpx.Response(503)
+        return httpx.Response(200, headers={
+            "Content-Type": "text/event-stream",
+            "X-Conversation-Id": "12"},
+            content=SSE_BODY.encode("utf-8"))
+
+    async def run_503():
+        orig, patched = _patch_transport(h_503_then_ok)
+        httpx.AsyncClient = patched
+        try:
+            got = []
+            async for conv, e in client.stream_chat("x", None, 1):
+                got.append(e.kind)
+            return got
+        finally:
+            httpx.AsyncClient = orig
+
+    client.RETRY_WAIT_MIN = 0.0
+    client.RETRY_WAIT_MAX = 0.0
+    try:
+        got = asyncio.run(run_503())
+    finally:
+        client.RETRY_WAIT_MIN, client.RETRY_WAIT_MAX = saved
+    check("m9: 503 -> retry -> успех",
+          got == ["delta", "tool", "tool_result", "delta", "done"]
+          and state503["n"] == 2,
+          f"n={state503['n']} kinds={got}")
+
 
 def main():
     test_parser()
