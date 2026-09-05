@@ -734,6 +734,18 @@ def _inv_upsert(db: Session, data: dict, existing: Device | None) -> Device:
     return d
 
 
+def _invalidate_vmware_cache():
+    """Безопасная инвалидация кэша сессий VMware. Падение не ломает CRUD."""
+    try:
+        from ..devices.vmware import clear_cache
+        clear_cache()
+        log.info("VMware cache invalidated after device change")
+    except ImportError:
+        log.debug("vmware module not available, skip cache clear")
+    except Exception as e:
+        log.warning("Failed to clear VMware cache: %s", e)
+
+
 @router.post("/inventory")
 async def inventory_create(request: Request,
                       db: Session = Depends(get_db),
@@ -745,6 +757,9 @@ async def inventory_create(request: Request,
         # форма вернётся с текстом ошибки поверх модалки
         return _inv_form(request, user, device=None,
                         error=e.detail, status_code=e.status_code)
+    # FIX-03: новый vCenter не должен вечно жить со stale-кэшем,
+    # оставшимся от прежних подключений
+    _invalidate_vmware_cache()
     return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
                      source_f=None, status_f=None, group_f=None,
                      flash="Устройство добавлено")
@@ -799,6 +814,8 @@ async def inventory_update(device_id: int, request: Request,
     except HTTPException as e:
         return _inv_form(request, user, device=d,
                          error=e.detail, status_code=e.status_code)
+    # FIX-03: изменились креды/адрес vCenter — прежняя сессия недействительна
+    _invalidate_vmware_cache()
     return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
                      source_f=None, status_f=None, group_f=None,
                      flash="Устройство обновлено")
@@ -819,11 +836,8 @@ def inventory_delete(device_id: int, request: Request,
     name = d.name
     db.delete(d)
     db.commit()
-    try:
-        from ..devices.vmware import clear_cache
-        clear_cache()
-    except Exception:  # pragma: no cover - кэш вторичен
-        pass
+    # FIX-03: единая точка сброса VMware-сессий (было inline в delete)
+    _invalidate_vmware_cache()
     return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
                      source_f=None, status_f=None, group_f=None,
                      flash=f"Устройство удалено: {name}")

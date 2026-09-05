@@ -32,6 +32,7 @@ from app.main import app  # noqa: E402
 from app.auth.jwt_utils import create_token  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.models import Device, User  # noqa: E402
+import app.devices.vmware as vmw_mod  # noqa: E402  (FIX-03: кэш сессий)
 
 PASS, FAIL = 0, 0
 
@@ -258,6 +259,54 @@ def main():
         check("sync-zabbix без настроек -> flash «не настроен» (не 500)",
               r.status_code == 200 and "не настроен" in r.text,
               f"got {r.status_code}")
+
+        # --- FIX-03: инвалидация кэша VMware при create/update/delete ---
+        # «Устройство» vCenter-типа создаётся как обычное manual; кэш
+        # сессий общий, поэтому проверяем сам факт сброса _adapters
+        # при любом изменении инвентаря (реальный vCenter в тесте не нужен).
+        vmw_mod._adapters["10.9.0.9:443:u"] = object()   # stale-сессия
+        r = client.post("/admin/inventory",
+                        data={"name": "vc-01", "type": "other",
+                              "host": "10.9.0.9", "port": "443",
+                              "username": "u", "password": "p",
+                              "enabled": "on"})
+        # «vc-01» в таблицу page=1 не попадает (пагинация, 30 устройств),
+        # поэтому успешность create проверяем flash + БД, а не таблицей
+        with SessionLocal() as db:
+            vc = db.query(Device).filter_by(name="vc-01").first()
+            vc_id = vc.id if vc else None
+        check("FIX-03: POST create -> 200, кэш _adapters сброшен",
+              r.status_code == 200 and vc_id is not None
+              and "Устройство добавлено" in r.text
+              and not vmw_mod._adapters,
+              f"status={r.status_code}, vc_id={vc_id}, "
+              f"cache={dict(vmw_mod._adapters)!r}")
+
+        vmw_mod._adapters["10.9.0.9:443:u"] = object()   # снова stale
+        r = client.put(f"/admin/inventory/{vc_id}",
+                       data={"name": "vc-01", "type": "other",
+                             "host": "10.9.0.9", "port": "443",
+                             "username": "u2", "password": "p2",
+                             "enabled": "on"})
+        check("FIX-03: PUT update -> 200, кэш _adapters сброшен",
+              r.status_code == 200 and not vmw_mod._adapters,
+              f"status={r.status_code}, cache={dict(vmw_mod._adapters)!r}")
+
+        vmw_mod._adapters["10.9.0.9:443:u2"] = object()  # stale перед DELETE
+        r = client.delete(f"/admin/inventory/{vc_id}")
+        check("FIX-03: DELETE -> 200, кэш _adapters сброшен (хелпер)",
+              r.status_code == 200 and not vmw_mod._adapters,
+              f"status={r.status_code}, cache={dict(vmw_mod._adapters)!r}")
+
+        # upsert не прошёл (дубль существующего имени) -> кэш НЕ трогаем
+        vmw_mod._adapters["x:443:u"] = object()
+        r = client.post("/admin/inventory",
+                        data={"name": "new-device", "type": "other",
+                              "host": "y"})
+        check("FIX-03: дубль имени (upsert fail) -> кэш НЕ сброшен",
+              r.status_code == 400 and len(vmw_mod._adapters) == 1,
+              f"status={r.status_code}, cache={dict(vmw_mod._adapters)!r}")
+        vmw_mod._adapters.clear()
 
         # --- Существующий REST API не сломан ---
         r = client.get("/api/devices",

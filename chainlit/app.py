@@ -31,6 +31,10 @@ async def on_message(message: cl.Message) -> None:
     conv_id = cl.user_session.get("conversation_id")
     answer = cl.Message(content="")
     await answer.send()  # пустое сообщение-контейнер, поток пойдёт в него
+    # FIX-04: индикатор работы агента на время tool-цикла
+    thinking = cl.Step(name="Агент думает")
+    await thinking.send()
+    step_counter = 0
     got_delta = False
     try:
         async for new_conv, ev in stream_chat(
@@ -39,9 +43,19 @@ async def on_message(message: cl.Message) -> None:
             if new_conv is not None:
                 cl.user_session.set("conversation_id", new_conv)
             if ev.kind == "delta":
+                if not got_delta:
+                    # первый токен — стадия «думает» закончилась
+                    thinking.output = "Ответ формируется..."
+                    await thinking.update()
+                    got_delta = True
                 await answer.stream_token(ev.data["delta"])
-                got_delta = True
-            elif ev.kind in ("tool", "tool_result"):
+            elif ev.kind == "tool":
+                # новый вызов инструмента — показать текущий шаг
+                step_counter += 1
+                thinking.output = f"Шаг {step_counter}: вызов {ev.data['tool']}"
+                await thinking.update()
+                await adapters.render_event(ev)
+            elif ev.kind == "tool_result":
                 await adapters.render_event(ev)
             elif ev.kind == "error":
                 # дружелюбный текст от бэкенда — в общий поток
@@ -49,9 +63,15 @@ async def on_message(message: cl.Message) -> None:
                 got_delta = True
             elif ev.kind == "done":
                 break
+        # финальный статус индикатора
+        thinking.output = (f"Выполнено {step_counter} шаг(ов)"
+                           if step_counter else "Ответ готов")
+        await thinking.update()
         if not got_delta:
             # только шаги, без текста — закрыть пустое сообщение
             await answer.update()
     except BackendError as e:
         # дружественный текст, без стека/URL/деталей
+        thinking.output = "Ошибка"
+        await thinking.update()
         await answer.update(content=e.user_message)
