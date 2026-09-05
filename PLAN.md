@@ -292,6 +292,53 @@ netops-llm/
   в пагинации не URL-кодируются (|urlencode) — одновременно в audit и
   conversations table.html; ломается только на &/=/#/+ в значении.
 
+### Этап 11 — миграция UI, Фазы 10–11: nginx reverse-proxy + docker-compose (готово, 2026-09-05)
+Сквозная маршрутизация: nginx как единая точка входа, Chainlit за
+auth_request, всё в docker-compose. Backend — единственный источник
+логики/RBAC/аудита; chainlit ходит только в /internal/chat/stream.
+- **Фаза 10, nginx (a0d4dce)**: nginx/nginx.conf удалён, вместо него
+  nginx/default.conf.template — envsubst-шаблон официального образа
+  (/etc/nginx/templates → conf.d). Маршруты: точный `location = /admin`
+  → 302 /admin/ (иначе /admin без слэша матчится SPA try_files); /admin/
+  и /api — SPA-проксирование на app:8000; /internal/ — `internal;`
+  (прямой внешний доступ закрыт); /chat и /chat/ — на chainlit:8001
+  (WebSocket Upgrade/Connection через map, proxy_buffering off для SSE).
+  auth_request → /_auth → app /internal/auth-check: подзапрос отдаёт
+  только 2xx/401/403 (иначе nginx вернёт 500); 401 → error_page =302
+  /admin/login; 403 (пользователь отключён) остаётся честным 403.
+  auth_request_set X-User-Id/Email/Role/Display-Name → proxy_set_header.
+  `${...}` — только NETOPS_*; nginx-переменные ($host и т.п.) envsubst
+  не трогает.
+- **Percent-encoding заголовков (a0d4dce)**: кириллица в X-User-* роняет
+  Starlette 500 → backend _user_headers quote()'ит display_name и email
+  (email safe="@._-~"), chainlit/auth.py парный unquote(); пустой email
+  после unquote → None. Менять только парой.
+- **Sub-guard (a0d4dce)**: JWT-sub без валидного числового id → 401
+  (backend/app/auth/deps.py + internal.py _load_user_by_id); до Фазы 10
+  нечисловой sub давал 500.
+- **Фаза 11, compose (4ec5e55)**: сервис chainlit (Dockerfile,
+  FASTAPI_INTERNAL_URL=http://app:8000, CHAINLIT_ROOT_PATH=/chat,
+  NETOPS_INTERNAL_SERVICE_TOKEN с :? — fail-fast, config.py падает на
+  пустом токене, иначе crash-loop; healthcheck /chat/health через
+  urllib — alpine без curl) + web (официальный nginx, template через
+  envsubst, NETOPS_* как ${VAR:-} — пустой секрет = заголовок не
+  передаётся = header-auth выключен, работает логин-форма).
+  .env.example / chainlit/.env.example обновлены.
+- Тесты: internal_ext_test.py 22/22 (кириллица 204 + encoded-заголовки,
+  sub=abc → 401, sub отсутствует → 401, X-Conversation-Id, auth-check,
+  /api/auth/me); регресс 16/16, conversations 30/30, audit 23/23,
+  settings 25/25. compose config валиден; fail-fast на пустом токене —
+  exit 15 с понятным текстом.
+- Верификатор PASS (116/116; adversarial: roundtrip quote/unquote
+  включая кириллицу, симуляция envsubst-рендера, /chat/health подтверждён
+  на исходниках установленного chainlit, grep: прямых вызовов
+  LM Studio/Zabbix/VMware в chainlit/ нет).
+- Наблюдение (не блокер): huge-int sub (например 20-значный) проходит
+  isdigit() и роняет db.get 500 вместо 401 — во всех трёх точках
+  (deps.py, internal.py×2); лечится length-cap в guard. Эксплойт требует
+  валидного JWT-секрета.
+- Live-проверка compose up / nginx / WebSocket — отложена на сервер
+  (Docker Desktop не поднимали).
 
 1. **Zabbix 6.2**: токен работает только параметром `auth` в теле JSON-RPC
    (заголовок Authorization: Bearer — не сработал); URL — http, не https;
@@ -391,15 +438,21 @@ build_system_prompt добавляет: текущее время + список
 ## 9. Дорожная карта — что дальше
 
 ### Текущий фокус: миграция UI (migration.md, 16 фаз)
-- Готово: Фазы 0–9 (Этапы 7–10 в §5) — снимок состояния, мок-режим,
+- Готово: Фазы 0–11 (Этапы 7–11 в §5) — снимок состояния, мок-режим,
   /internal/chat/stream, каркас админки /admin/*, контент: инвентарь,
   аудит, настройки, история диалогов; Chainlit-чат через
   /internal/chat/stream + авторизация (auth-check для nginx,
-  header-auth, логин-форма).
-- Следующие: Фаза 10 (nginx: auth_request /internal/auth-check для /chat,
-  WebSocket/SSE-заголовки, internal; маршруты /chat), Фазы 11–12 (docker:
-  сервис chainlit в compose, dev-запуск и мок-тестирование), Фазы 13–16
-  (тестирование, замена старого интерфейса, документация, готовность).
+  header-auth, логин-форма); nginx reverse-proxy (auth_request,
+  X-User-* заголовки, WebSocket/SSE, envsubst-шаблон); docker-compose
+  с сервисами chainlit + web (nginx), fail-fast на пустом токене.
+- Следующие: Фаза 12 (dev-запуск docker: build + up, мок-тестирование
+  полного роу-трип / → nginx → /chat → chainlit → backend), затем Фазы
+  13–16 (тестирование, замена старого интерфейса, документация,
+  готовность). Live-проверка nginx/WebSocket отложена на сервер.
+- Дельта-кандидат (из верификации Этапа 11): length-cap в sub-guard —
+  20-значный sub проходит isdigit() и роняет db.get 500 вместо 401
+  (deps.py + internal.py ×2); одна строка, но требует валидный
+  JWT-секрет для эксплойта.
 
 ### Ближайший шаг: прямой SNMP для ручных устройств
 - Форма: версия SNMP (v2c community / v3), поля в Device (snmp_version и т.п.).
