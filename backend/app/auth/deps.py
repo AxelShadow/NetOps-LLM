@@ -19,7 +19,12 @@ def get_current_user(
     except jwt.PyJWTError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "Недействительный токен")
-    user = db.get(User, int(payload["sub"]))
+    sub = payload.get("sub")
+    if sub is None or not str(sub).isdigit():
+        # нечисловой sub раньше ронял int() -> 500
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            "Недействительный токен")
+    user = db.get(User, int(sub))
     if not user or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "Пользователь не найден или отключён")

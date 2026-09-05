@@ -1,5 +1,6 @@
 """Тесты расширений внутреннего API: X-Conversation-Id (Фаза 6),
-/internal/auth-check и поле id в /api/auth/me (Фаза 7).
+/internal/auth-check и поле id в /api/auth/me (Фаза 7);
+percent-encoding display_name и нечисловой sub (Фаза 10).
 
 Стиль как у internal_api_test.py: TestClient на временной sqlite (env
 задаётся ДО импорта app), мок-режим LLM/инструментов, dev-логин.
@@ -10,6 +11,10 @@
 import os
 import sys
 import tempfile
+import datetime as dt
+from urllib.parse import quote
+
+import jwt as pyjwt
 
 TMP = tempfile.mkdtemp(prefix="netops_internal_ext_")
 os.environ["NETOPS_DATABASE_URL"] = f"sqlite:///{TMP}/internal_ext_test.db".replace("\\", "/")
@@ -123,11 +128,13 @@ def main():
                                 "Authorization": f"Bearer {token}"})
         check("8: auth-check Bearer -> 204", r.status_code == 204,
               f"got {r.status_code} {r.text[:200]}")
+        # display_name с Фазы 10 percent-encoded (latin-1-safe заголовки)
         check("8: все 4 заголовка пользователя",
               r.headers.get("x-user-id") == str(admin_id)
               and r.headers.get("x-user-email") == admin_username
               and r.headers.get("x-user-role") == "admin"
-              and r.headers.get("x-user-display-name") == admin_display_name,
+              and r.headers.get("x-user-display-name")
+              == quote(admin_display_name or "", safe=""),
               f"id={r.headers.get('x-user-id')!r} "
               f"email={r.headers.get('x-user-email')!r} "
               f"role={r.headers.get('x-user-role')!r} "
@@ -163,6 +170,58 @@ def main():
               set(r.json().keys()) == {"id", "username", "display_name",
                                       "role"},
               f"keys={sorted(r.json().keys())}")
+
+        # ---------- Фаза 10: encoding display_name + нечисловой sub ----------
+
+        # (13) юзер с кириллическим display_name -> 204, заголовок
+        # percent-encoded (latin-1), без UnicodeEncodeError (500)
+        with SessionLocal() as db:
+            db.get(User, admin_id).display_name = "Шатов А.В."
+            db.commit()
+        r = auth_check(headers={"X-Internal-Service-Token": "test-token",
+                                "Authorization": f"Bearer {token}"})
+        dn_hdr = r.headers.get("x-user-display-name", "")
+        check("13: кириллица в display_name -> 204 (не 500)",
+              r.status_code == 204, f"got {r.status_code} {r.text[:200]}")
+        check("13: X-User-Display-Name percent-encoded ASCII",
+              dn_hdr == quote("Шатов А.В.", safe="")
+              and dn_hdr.isascii(),
+              f"dn={dn_hdr!r} expected={quote('Шатов А.В.', safe='')!r}")
+        with SessionLocal() as db:
+            db.get(User, admin_id).display_name = admin_display_name
+            db.commit()
+
+        # (14) JWT с нечисловым sub -> 401, не 500 (int() guard)
+        def _jwt(payload: dict) -> str:
+            payload = {"exp": dt.datetime.now(dt.UTC) + dt.timedelta(hours=1),
+                       **payload}
+            return pyjwt.encode(payload, os.environ["NETOPS_JWT_SECRET"],
+                                algorithm="HS256")
+
+        bad_sub = _jwt({"sub": "abc", "username": "x", "role": "admin"})
+        r = auth_check(headers={"X-Internal-Service-Token": "test-token",
+                                "Authorization": f"Bearer {bad_sub}"})
+        check("14: auth-check нечисловой sub -> 401 (не 500)",
+              r.status_code == 401, f"got {r.status_code} {r.text[:200]}")
+
+        # (15) JWT без sub -> 401, не 500
+        no_sub = _jwt({"username": "x", "role": "admin"})
+        r = auth_check(headers={"X-Internal-Service-Token": "test-token",
+                                "Authorization": f"Bearer {no_sub}"})
+        check("15: auth-check без sub -> 401 (не 500)",
+              r.status_code == 401, f"got {r.status_code} {r.text[:200]}")
+
+        # (16) регресс deps.py: нечисловой sub в Bearer -> 401, не 500
+        r = client.get("/api/auth/me",
+                       headers={"Authorization": f"Bearer {bad_sub}"})
+        check("16: /api/auth/me нечисловой sub -> 401 (не 500)",
+              r.status_code == 401, f"got {r.status_code} {r.text[:200]}")
+
+        # (17) регресс deps.py: валидный токен по-прежнему работает
+        r = client.get("/api/auth/me",
+                       headers={"Authorization": f"Bearer {token}"})
+        check("17: /api/auth/me валидный токен -> 200",
+              r.status_code == 200, f"got {r.status_code} {r.text[:200]}")
 
     print(f"\nИтого: PASS={PASS} FAIL={FAIL}")
     sys.exit(0 if FAIL == 0 else 1)

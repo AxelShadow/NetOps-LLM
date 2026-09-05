@@ -10,6 +10,7 @@
    числовой user_id и метаданные.
 """
 import secrets
+from urllib.parse import unquote
 
 import chainlit as cl
 import httpx
@@ -43,12 +44,15 @@ async def header_auth(headers: dict) -> cl.User | None:
         return None
     try:
         user_id = int(headers.get("X-User-Id", ""))
-        username = headers["X-User-Email"]
         role = headers["X-User-Role"]
     except (ValueError, KeyError):
         return None
-    return _to_cl_user(user_id, username,
-                       headers.get("X-User-Display-Name"), role)
+    # email и display_name приходят percent-encoded (HTTP-заголовки latin-1)
+    username = unquote(headers.get("X-User-Email") or "")
+    display_name = unquote(headers.get("X-User-Display-Name") or "")
+    if not username:
+        return None
+    return _to_cl_user(user_id, username, display_name, role)
 
 
 @cl.password_auth_callback

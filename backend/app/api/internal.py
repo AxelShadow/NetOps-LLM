@@ -8,6 +8,7 @@
 При пустом NETOPS_INTERNAL_SERVICE_TOKEN все /internal/*-маршруты выключены.
 """
 import secrets
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
@@ -50,11 +51,15 @@ def _load_user_by_id(x_user_id: str | None = Header(default=None),
 
 
 def _user_headers(user: User) -> dict[str, str]:
-    """Заголовки пользователя для nginx auth_request (Фаза 7/10)."""
+    """Заголовки пользователя для nginx auth_request (Фаза 7/10).
+
+    Email и display-name percent-encoded: HTTP-заголовки latin-1,
+    кириллица иначе роняет Starlette с UnicodeEncodeError (500).
+    ASCII-логины (admin@corp.local) quote не меняет."""
     return {"X-User-Id": str(user.id),
-            "X-User-Email": user.username,
+            "X-User-Email": quote(user.username, safe="@._-~"),
             "X-User-Role": user.role.value,
-            "X-User-Display-Name": user.display_name or ""}
+            "X-User-Display-Name": quote(user.display_name or "", safe="")}
 
 
 @router.get("/auth-check",
@@ -78,7 +83,11 @@ def internal_auth_check(request: Request, db: Session = Depends(get_db)):
         payload = decode_token(token)
     except pyjwt.PyJWTError:
         raise HTTPException(401, "Недействительный токен")
-    user = db.get(User, int(payload["sub"]))
+    sub = payload.get("sub")
+    if sub is None or not str(sub).isdigit():
+        # нечисловой sub раньше ронял int() -> 500
+        raise HTTPException(401, "Недействительный токен")
+    user = db.get(User, int(sub))
     if not user:
         raise HTTPException(401, "Пользователь не найден")
     if not user.is_active:
