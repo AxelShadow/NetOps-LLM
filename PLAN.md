@@ -368,6 +368,25 @@ auth_request, всё в docker-compose. Backend — единственный и�
   adversarial: mid-stream ReadTimeout не ретраится (0 дублей), 401 —
   1 вызов (не жжёт попытки), конкурентные вызовы не делят retry-состояние.
 
+### Этап 13 — техдолг: FIX-03 + FIX-04 (готово, 2026-09-05)
+- **FIX-03, инвалидация кэша VMware (15c4132)**: helper
+  `_invalidate_vmware_cache()` в ui/router.py — безопасный (ImportError →
+  debug-лог, прочие Exception → warning, CRUD не ломается), вызывает
+  `clear_cache()` из devices/vmware.py. Вызывается во ВСЕХ трёх точках:
+  inventory_create, inventory_update, inventory_delete (было только
+  удаление — create/update оставляли stale-кэш). Тесты
+  test_admin_ui_inventory.py: 35/35 на временной sqlite (проверки:
+  _adapters пуст после DELETE, кэш сброшен после create/update,
+  сбой upsert не инвалидирует). Верификатор PASS, netops.db не тронута.
+- **FIX-04, индикатор агента в Chainlit (15c4132)**: cl.Step
+  «Агент думает» в on_message отправляется до stream_chat; первый
+  delta-токен → «Ответ формируется...»; каждый tool-вызов → «Шаг N:
+  вызов X» (счётчик); финал → «Выполнено N шаг(ов)» / «Ответ готов»;
+  BackendError → «Ошибка». tool_result рендерится как раньше
+  (adapters.render_event), счётчик не трогает. API проверен по
+  установленному chainlit (Step.output — свойство, send/update async);
+  py_compile + import-smoke чисты, регрессия backend 21/21.
+
 1. **Zabbix 6.2**: токен работает только параметром `auth` в теле JSON-RPC
    (заголовок Authorization: Bearer — не сработал); URL — http, не https;
    sortfield "clock" у problem.get запрещён; selectHosts у problem.get молча
