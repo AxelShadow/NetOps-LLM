@@ -8,3 +8,6 @@ openai
 pyvmomi
 cachetools==5.4.0
 jinja2
+httpx
+python-multipart
+pytest

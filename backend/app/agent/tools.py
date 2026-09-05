@@ -16,7 +16,6 @@ from ..db import SessionLocal
 from ..models import Device, DeviceType, AuditLog
 from ..devices.vmware import get_adapter, drop_adapter
 from ..config import get_settings
-from .mock import MOCK_TOOLS
 
 settings = get_settings()
 
@@ -52,7 +51,9 @@ def register_tool(
         def wrapper(**kwargs):
             # Мок-режим: сетевые инструменты отдают фейковые данные
             # без обращения к vCenter/Zabbix/ICMP (см. app/agent/mock.py).
+            # mock.py импортируется только при активном мок-режиме.
             if settings.mock_mode:
+                from .mock import MOCK_TOOLS
                 mock_fn = MOCK_TOOLS.get(name)
                 if mock_fn is not None:
                     return mock_fn(kwargs)
