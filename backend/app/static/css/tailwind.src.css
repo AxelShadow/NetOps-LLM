@@ -1,0 +1,9 @@
+/* Входной файл Tailwind CLI v4 для прод-сборки админки (Фаза 13).
+   Сборка: dev\tailwindcss.exe -i backend/app/static/css/tailwind.src.css
+                             -o backend/app/static/css/tailwind.css --minify
+   Результат коммитится: prod-контейнеры не тянут CDN и не собирают ничего. */
+@import "tailwindcss";
+
+/* Источники классов: все серверные шаблоны админки (Jinja2), классы
+   полностью статичны — динамической сборки имён нет. */
+@source "../templates";

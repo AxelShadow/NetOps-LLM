@@ -54,16 +54,16 @@
     {% if pages > 1 %}
     <span class="flex items-center gap-3">
         {% if page > 1 %}
-        <a href="/admin/audit/partial/table?{% for k, v in filters.items() %}{% if v %}{{ k }}={{ v }}&amp;{% endif %}{% endfor %}page={{ page - 1 }}"
+        <a href="/admin/audit/partial/table?{% for k, v in filters.items() %}{% if v %}{{ k }}={{ v|urlencode }}&amp;{% endif %}{% endfor %}page={{ page - 1 }}"
            class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100"
-           hx-get="/admin/audit/partial/table?{% for k, v in filters.items() %}{% if v %}{{ k }}={{ v }}&amp;{% endif %}{% endfor %}page={{ page - 1 }}"
+           hx-get="/admin/audit/partial/table?{% for k, v in filters.items() %}{% if v %}{{ k }}={{ v|urlencode }}&amp;{% endif %}{% endfor %}page={{ page - 1 }}"
            hx-target="#audit-table">Назад</a>
         {% endif %}
         <span>Страница {{ page }} из {{ pages }}</span>
         {% if page < pages %}
-        <a href="/admin/audit/partial/table?{% for k, v in filters.items() %}{% if v %}{{ k }}={{ v }}&amp;{% endif %}{% endfor %}page={{ page + 1 }}"
+        <a href="/admin/audit/partial/table?{% for k, v in filters.items() %}{% if v %}{{ k }}={{ v|urlencode }}&amp;{% endif %}{% endfor %}page={{ page + 1 }}"
            class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100"
-           hx-get="/admin/audit/partial/table?{% for k, v in filters.items() %}{% if v %}{{ k }}={{ v }}&amp;{% endif %}{% endfor %}page={{ page + 1 }}"
+           hx-get="/admin/audit/partial/table?{% for k, v in filters.items() %}{% if v %}{{ k }}={{ v|urlencode }}&amp;{% endif %}{% endfor %}page={{ page + 1 }}"
            hx-target="#audit-table">Вперёд</a>
         {% endif %}
     </span>

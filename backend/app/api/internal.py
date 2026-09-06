@@ -42,7 +42,9 @@ def _check_service_token(x_internal_service_token: str | None = Header(default=N
 def _load_user_by_id(x_user_id: str | None = Header(default=None),
                      db: Session = Depends(get_db)) -> User:
     """Пользователь из БД по X-User-Id; проверка активна."""
-    if x_user_id is None or not x_user_id.isdigit():
+    if x_user_id is None or not x_user_id.isdigit() \
+            or len(x_user_id) > 18:
+        # length-cap: huge-int иначе ронял db.get -> 500
         raise HTTPException(401, "Не передан X-User-Id")
     user = db.get(User, int(x_user_id))
     if not user or not user.is_active:
@@ -84,8 +86,8 @@ def internal_auth_check(request: Request, db: Session = Depends(get_db)):
     except pyjwt.PyJWTError:
         raise HTTPException(401, "Недействительный токен")
     sub = payload.get("sub")
-    if sub is None or not str(sub).isdigit():
-        # нечисловой sub раньше ронял int() -> 500
+    if sub is None or not str(sub).isdigit() or len(str(sub)) > 18:
+        # нечисловой/huge-int sub раньше ронял int()/db.get -> 500
         raise HTTPException(401, "Недействительный токен")
     user = db.get(User, int(sub))
     if not user:

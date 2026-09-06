@@ -8,3 +8,4 @@ Thumbs.db
 .env
 chainlit/.files/
 chainlit/.chainlit/translations/
+dev/

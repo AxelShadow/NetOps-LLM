@@ -84,16 +84,16 @@
     {% if pages > 1 %}
     <span class="flex items-center gap-3">
         {% if page > 1 %}
-        <a href="/admin/inventory/partial/table?{% for k, v in filters.items() %}{{ k }}={{ v }}&amp;{% endfor %}page={{ page - 1 }}"
+        <a href="/admin/inventory/partial/table?{% for k, v in filters.items() %}{{ k }}={{ v|urlencode }}&amp;{% endfor %}page={{ page - 1 }}"
            class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100"
-           hx-get="/admin/inventory/partial/table?{% for k, v in filters.items() %}{{ k }}={{ v }}&amp;{% endfor %}page={{ page - 1 }}"
+           hx-get="/admin/inventory/partial/table?{% for k, v in filters.items() %}{{ k }}={{ v|urlencode }}&amp;{% endfor %}page={{ page - 1 }}"
            hx-target="#inventory-table">Назад</a>
         {% endif %}
         <span>Страница {{ page }} из {{ pages }}</span>
         {% if page < pages %}
-        <a href="/admin/inventory/partial/table?{% for k, v in filters.items() %}{{ k }}={{ v }}&amp;{% endfor %}page={{ page + 1 }}"
+        <a href="/admin/inventory/partial/table?{% for k, v in filters.items() %}{{ k }}={{ v|urlencode }}&amp;{% endfor %}page={{ page + 1 }}"
            class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100"
-           hx-get="/admin/inventory/partial/table?{% for k, v in filters.items() %}{{ k }}={{ v }}&amp;{% endfor %}page={{ page + 1 }}"
+           hx-get="/admin/inventory/partial/table?{% for k, v in filters.items() %}{{ k }}={{ v|urlencode }}&amp;{% endfor %}page={{ page + 1 }}"
            hx-target="#inventory-table">Вперёд</a>
         {% endif %}
     </span>

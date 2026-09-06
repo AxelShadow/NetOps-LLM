@@ -4,9 +4,15 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}NetOps Admin{% endblock %}</title>
-    {# Tailwind через CDN — для разработки. TODO(Фаза 13): собрать локальный
-       css через Tailwind CLI и заменить на /admin/static/css/tailwind.css #}
+    {# Tailwind: прод — локальная сборка /admin/static/css/tailwind.css
+       (сгенерирована Tailwind CLI v4, dev\tailwindcss.exe; см. tailwind.src.css);
+       CDN — только в dev-режиме, чтобы жить без пересборки при правках классов.
+       migration.md Фаза 13: в продакшене CDN не используется. #}
+    {% if is_dev %}
     <script src="https://cdn.tailwindcss.com"></script>
+    {% else %}
+    <link rel="stylesheet" href="/admin/static/css/tailwind.css">
+    {% endif %}
     <script src="/admin/static/js/htmx.min.js"></script>
     {% block head %}{% endblock %}
 </head>

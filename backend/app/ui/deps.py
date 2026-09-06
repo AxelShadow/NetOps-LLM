@@ -17,12 +17,19 @@ COOKIE_NAME = "netops_token"
 
 
 def load_user_from_token(token: str, db: Session) -> User | None:
-    """Общая загрузка пользователя по JWT (используется и API, и страницами)."""
+    """Общая загрузка пользователя по JWT (используется и API, и страницами).
+
+    sub-guard как в auth/deps.py: нечисловой/huge-int sub -> None (401/редирект),
+    а не 500 от int()/db.get.
+    """
     try:
         payload = decode_token(token)
     except jwt.PyJWTError:
         return None
-    user = db.get(User, int(payload["sub"]))
+    sub = payload.get("sub")
+    if sub is None or not str(sub).isdigit() or len(str(sub)) > 18:
+        return None
+    user = db.get(User, int(sub))
     if not user or not user.is_active:
         return None
     return user

@@ -20,8 +20,9 @@ def get_current_user(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "Недействительный токен")
     sub = payload.get("sub")
-    if sub is None or not str(sub).isdigit():
-        # нечисловой sub раньше ронял int() -> 500
+    # нечисловой/гигантский sub раньше ронял int()/db.get -> 500;
+    # length-cap: валидный id в таблицу users таким быть не может
+    if sub is None or not str(sub).isdigit() or len(str(sub)) > 18:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "Недействительный токен")
     user = db.get(User, int(sub))

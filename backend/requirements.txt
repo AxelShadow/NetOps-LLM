@@ -8,3 +8,6 @@ PyJWT
 openai
 pyvmomi
 cachetools==5.4.0
+httpx
+jinja2
+python-multipart
