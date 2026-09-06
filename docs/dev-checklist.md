@@ -1,4 +1,4 @@
-# Чек-лист локальной проверки (Фаза 12, migration.md)
+# Чек-лист локальной проверки (Фазы 12–13, migration.md)
 
 Полный роут-трип dev-стека без реальных LLM/Zabbix/VMware:
 мок-инструменты (`NETOPS_MOCK_MODE`), логин мимо AD (`NETOPS_DEV_MODE`,
@@ -33,7 +33,7 @@ docker compose -f docker-compose.dev.yml run --rm seed   # фикстуры (и�
 | 1 | Логин | http://localhost:8080 → вход `admin@example.com` + любой пароль | Редирект в интерфейс, роль admin |
 | 2 | Доступ к админке | /admin/ (под admin) | Страницы админки открываются |
 | 3 | Доступ к инвентарю | /admin/inventory | 6 устройств из сида (core-rtr1, sw-access-1, fw-usergate, vcenter-stand, esxi-stand-1, srv-old) |
-| 4 | Доступ к аудиту | /admin/audit (только admin/engineer) | 4 записи сида: ok / error / denied (+ маркер seed_dev) |
+| 4 | Доступ к аудиту | /admin/audit (только admin; engineer/viewer → 403 — см. router.py `require_roles_page(Role.admin)`) | 4 записи сида: ok / error / denied (+ маркер seed_dev) |
 | 5 | Открытие чата | /chat (Chainlit) | Загружается, виден индикатор агента (FIX-04) |
 | 6 | Отправка сообщения | «Пинг mock-host» в чате | Сообщение уходит, приходит delta-текст |
 | 7 | Шаги инструментов | Тот же запрос | Появляются шаги инструмента `ping` (tool → tool_result) |
@@ -57,3 +57,28 @@ NETOPS_MOCK_MODE=true NETOPS_DEV_MODE=true \
   NETOPS_BOOTSTRAP_ADMIN=admin@example.com \
   NETOPS_JWT_SECRET=dev uvicorn app.main:app --port 8000
 ```
+
+## Сквозной ручной чек-лист Фазы 13
+
+Автоматическая версия тех же 14 шагов — тест
+`backend/tests/test_e2e_flow.py` (TestClient, временная sqlite, мок-режим):
+
+```bash
+cd backend && .venv/Scripts/python.exe tests/test_e2e_flow.py
+```
+
+Ручная часть — то, что локально не автоматизируется (визуальная
+проверка UI, без curl/TestClient):
+
+| № | Что проверить | Как | Ожидание |
+|---|---------------|-----|----------|
+| 4 | Создание устройства через модальную форму | Инвентарь → «Добавить» → заполнить форму → Сохранить (admin) | Модалка закрывается, flash «Устройство добавлено», строка устройства в таблице |
+| 13 | Вход viewer | http://localhost:8080 → `viewer@example.com` + любой пароль | Dashboard открывается; пункты Инвентарь/Аудит/Настройки скрыты в меню, прямые URL дают 403 |
+| 14 | Чат viewer | Открыть /chat, отправить «Пинг mock-host» | Чат открывается, шаги инструмента `ping` и ответ отображаются (инструменты доступны viewer — tools.py:87) |
+| — | Индикатор агента (FIX-04) | Любой запрос в чате | «Агент думает» → «Шаг 1: вызов ping» → «Выполнено 1 шаг(ов)»; без шагов — «Ответ готов»; при сбое — «Ошибка» |
+| — | nginx / WebSocket / live-сервер | — | Проверяется на сервере, вне локальной Фазы 13 |
+
+Примечание к RBAC аудита: в старой таблице выше (п.4) аудит значился
+как «admin/engineer» — по факту кода (`require_roles_page(Role.admin)`
+в ui/router.py + NAV_ITEMS) раздел доступен только admin, engineer
+получает 403. Строка выше исправлена.

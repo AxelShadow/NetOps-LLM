@@ -422,6 +422,55 @@ auth_request, всё в docker-compose. Backend — единственный и�
   sse_parser 21/21 + scenarios 9/9, seed идемпотентен; всё на
   временных sqlite, netops.db не тронута.
 
+### Этап 15 — миграция UI, Фаза 13: тестирование (готово, 2026-09-06)
+- **backend/tests/test_agent_tools_rbac.py** (13): RBAC-ветки
+  execute_tool напрямую — unknown-tool («не найден в системе»,
+  статус error + аудит), denied viewer против roles=["admin"]
+  (тестовый инструмент через register_tool, удаление из _registry в
+  finally; реальные роли denied не достигают — у всех инструментов
+  дефолт ["viewer","engineer","admin"], tools.py:87), «Запрещено»
+  в исключении → denied, обрезка аудита 4000 / возврата 20000,
+  RBAC-проверка до мок-диспетчеризации, аудит-поля (duration_ms
+  у denied/unknown = None).
+- **backend/tests/test_agent_limit.py** (8): сценарий «лимит»
+  через /internal/chat/stream — ровно 20 кадров tool (все
+  get_current_time) + 20 tool_result ok, delta ровно одна
+  «(Остановлено: лимит шагов агента)», [DONE] последний; БД:
+  20 assistant с tool_calls + 20 role=tool, финального
+  assistant-сообщения с «Остановлено» НЕТ (текст стримится, но
+  final_text="" → не сохраняется — фиксация поведения, не баг);
+  аудит: 20 записей ok.
+- **chainlit/adapters_test.py** (11): render_event с моками
+  cl.Step/user_session (без живой сессии chainlit): _fmt_args
+  (пустые → «—», первые 5 пар), _fmt_result ✔/✖, усечение
+  MAX_PREVIEW=400 + суффикс « …», delta/error/done → None без
+  Step, tool → Step «Инструмент: …» + send, tool_result →
+  update + сброс current_step, orphan-tool_result → свой Step.
+- **backend/tests/test_e2e_flow.py** (29): сквозной тест всех 14
+  шагов migration.md на TestClient (временная sqlite, мок-режим):
+  логин admin → dashboard → инвентарь + partial → создание
+  устройства (flash «Устройство добавлено» + Device в БД) → аудит
+  → чат «пинг» через /internal/chat/stream (кадры tool ping →
+  tool_result «Обмен пакетами» → финальный delta → [DONE]) →
+  диалог в истории (/admin/conversations + details) → вызов ping
+  в аудите (фильтр dialog={conv_id}) → viewer: 403-матрица
+  (аудит/инвентарь GET+POST/диалоги/настройки), чат viewer
+  работает (все инструменты допускают viewer — факт tools.py:87).
+- **run_tests.py** (корень): консолидированный runner 16 наборов
+  (backend-венв: 10 существующих + 3 новых + pytest mock_mode;
+  chainlit-венв: sse_parser + scenarios + adapters) — subprocess
+  с PYTHONIOENCODING=utf-8, MISSING не провал, отсутствие венва →
+  exit 2 с инструкцией. Полный прогон 16/16 OK (~1 мин).
+- **docs/dev-checklist.md**: ручной чек-лист Фазы 13 (создание
+  устройства через модалку, вход viewer, индикатор FIX-04 «Агент
+  думает» → «Шаг N» → «Выполнено N шаг(ов)», nginx/WebSocket — на
+  сервере); исправлена строка аудита: только admin (engineer →
+  403, require_roles_page(Role.admin) в ui/router.py).
+- Прогоны: 16/16 наборов, 61 новая проверка (13+8+29+11), двойные
+  прогоны стабильны, регрессий нет (118 прежних зелёные), netops.db
+  не тронута (байт-в-байт). Грабля: консоль Windows cp1251 — новым
+  тестам нужен sys.stdout.reconfigure(encoding="utf-8").
+
 1. **Zabbix 6.2**: токен работает только параметром `auth` в теле JSON-RPC
    (заголовок Authorization: Bearer — не сработал); URL — http, не https;
    sortfield "clock" у problem.get запрещён; selectHosts у problem.get молча
@@ -520,7 +569,7 @@ build_system_prompt добавляет: текущее время + список
 ## 9. Дорожная карта — что дальше
 
 ### Текущий фокус: миграция UI (migration.md, 16 фаз)
-- Готово: Фазы 0–12 (Этапы 7–14 в §5) — снимок состояния, мок-режим,
+- Готово: Фазы 0–13 (Этапы 7–15 в §5) — снимок состояния, мок-режим,
   /internal/chat/stream, каркас админки /admin/*, контент: инвентарь,
   аудит, настройки, история диалогов; Chainlit-чат через
   /internal/chat/stream + авторизация (auth-check для nginx,
@@ -528,13 +577,17 @@ build_system_prompt добавляет: текущее время + список
   X-User-* заголовки, WebSocket/SSE, envsubst-шаблон); docker-compose
   с сервисами chainlit + web (nginx), fail-fast на пустом токене;
   Фаза 12 — dev-стек docker-compose.dev.yml + seed_dev.py +
-  SSE-сценарии + чек-лист (docs/dev-checklist.md).
-- Следующие: Фазы 13–16 (тестирование, замена старого интерфейса,
+  SSE-сценарии + чек-лист (docs/dev-checklist.md); Фаза 13 —
+  тестирование (test_agent_tools_rbac 13, test_agent_limit 8,
+  adapters_test 11, test_e2e_flow 29, runner run_tests.py 16/16,
+  ручной чек-лист dev-checklist.md).
+- Следующие: Фазы 14–16 (замена старого интерфейса,
   документация, готовность). Live-проверка nginx/WebSocket и
   docker-стека отложена на сервер.
 - Дельта-кандидат (из верификации Этапа 11): length-cap в sub-guard —
   20-значный sub проходит isdigit() и роняет db.get 500 вместо 401
-  (deps.py + internal.py ×2); одна строка, но требует валидный
+  (deps.py + internal.py ×2); правка лежит в рабочем дереве
+  (незакоммичена, вне Фазы 13) — одна строка, но требует валидный
   JWT-секрет для эксплойта.
 
 ### Ближайший шаг: прямой SNMP для ручных устройств
