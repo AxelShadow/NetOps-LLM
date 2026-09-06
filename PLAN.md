@@ -387,6 +387,41 @@ auth_request, всё в docker-compose. Backend — единственный и�
   установленному chainlit (Step.output — свойство, send/update async);
   py_compile + import-smoke чисты, регрессия backend 21/21.
 
+### Этап 14 — миграция UI, Фаза 12: локальная разработка и мок-тестирование (готово, 2026-09-06)
+- **docker-compose.dev.yml**: полный dev-стек без реальных
+  LLM/Zabbix/VMware — sqlite (том devdata), NETOPS_MOCK_MODE=true
+  (15 мок-инструментов), NETOPS_DEV_MODE=true (логин мимо AD, пароль
+  любой), dev-секреты по умолчанию. Сервисы app / seed / chainlit /
+  web (nginx :8080) — роут-трип / → nginx → /chat → chainlit →
+  backend. `docker compose config --quiet` — валиден. Сброс данных:
+  `down -v`.
+- **backend/seed_dev.py**: идемпотентные дев-фикстуры. Три
+  пользователя ДО первого входа (admin@/engineer@/viewer@example.com;
+  в DEV_MODE автовыдача даёт только viewer, роли admin/engineer —
+  только сидом), 6 устройств разных типов, 2 диалога (plain и с
+  tool_calls JSON в сообщении ассистента), 4 записи аудита
+  (ok/error/denied + невидимый маркер seed_dev как guard
+  идемпотентности). Повторный прогон ничего не создаёт (проверено).
+- **chainlit/dev_sse/*.sse** (4 сценария из migration.md):
+  success_tool_call / error_tool_call / timeout / multi_step —
+  эталонные SSE-последовательности по фактическому контракту
+  chat.py: имена инструментов ping / vmware_vms (реестр tools.py),
+  preview = первые 200 симв. результата, timeout.sse — обрыв без
+  [DONE] (последний delta оборван посередине).
+- **chainlit/dev_sse/scenarios_test.py**: каждый .sse-файл
+  прогоняется через реальный parse_sse_line client.py (9/9 PASS).
+  Грабля: парсер ожидает строки БЕЗ \n (как aiter_lines httpx) —
+  тест срезает перевод строки перед передачей.
+- **docs/dev-checklist.md**: чек-лист локальной проверки — 11
+  пунктов из migration.md (логин → сохранение аудита) с командами
+  запуска, таблицей пользователей и мок-триггерами: host
+  `mock-ошибка` → status=error (mock.py), сообщения «ошибка» /
+  «лимит» → сценарии LLM (llm/client.py).
+- Прогоны: backend-тесты 118/118 (audit 23, conversations 30,
+  inventory 35, settings 25, mock_mode 5 через pytest), chainlit
+  sse_parser 21/21 + scenarios 9/9, seed идемпотентен; всё на
+  временных sqlite, netops.db не тронута.
+
 1. **Zabbix 6.2**: токен работает только параметром `auth` в теле JSON-RPC
    (заголовок Authorization: Bearer — не сработал); URL — http, не https;
    sortfield "clock" у problem.get запрещён; selectHosts у problem.get молча
@@ -485,17 +520,18 @@ build_system_prompt добавляет: текущее время + список
 ## 9. Дорожная карта — что дальше
 
 ### Текущий фокус: миграция UI (migration.md, 16 фаз)
-- Готово: Фазы 0–11 (Этапы 7–11 в §5) — снимок состояния, мок-режим,
+- Готово: Фазы 0–12 (Этапы 7–14 в §5) — снимок состояния, мок-режим,
   /internal/chat/stream, каркас админки /admin/*, контент: инвентарь,
   аудит, настройки, история диалогов; Chainlit-чат через
   /internal/chat/stream + авторизация (auth-check для nginx,
   header-auth, логин-форма); nginx reverse-proxy (auth_request,
   X-User-* заголовки, WebSocket/SSE, envsubst-шаблон); docker-compose
-  с сервисами chainlit + web (nginx), fail-fast на пустом токене.
-- Следующие: Фаза 12 (dev-запуск docker: build + up, мок-тестирование
-  полного роу-трип / → nginx → /chat → chainlit → backend), затем Фазы
-  13–16 (тестирование, замена старого интерфейса, документация,
-  готовность). Live-проверка nginx/WebSocket отложена на сервер.
+  с сервисами chainlit + web (nginx), fail-fast на пустом токене;
+  Фаза 12 — dev-стек docker-compose.dev.yml + seed_dev.py +
+  SSE-сценарии + чек-лист (docs/dev-checklist.md).
+- Следующие: Фазы 13–16 (тестирование, замена старого интерфейса,
+  документация, готовность). Live-проверка nginx/WebSocket и
+  docker-стека отложена на сервер.
 - Дельта-кандидат (из верификации Этапа 11): length-cap в sub-guard —
   20-значный sub проходит isdigit() и роняет db.get 500 вместо 401
   (deps.py + internal.py ×2); одна строка, но требует валидный

@@ -1,0 +1,8 @@
+data: {"delta": "Проверяю инвентарь VMware."}
+
+data: {"tool": "vmware_vms", "args": {}}
+
+data: {"tool_result": {"name": "vmware_vms", "ok": true, "preview": "[{\"name\": \"srv-app-01\", \"power\": \"poweredOn\", \"host\": \"esxi-01\", \"ip\": \"192.0.2.21\", \"cpu_count\": 4, \"memory_gb\": 16, \"used_gb\": 10.5, \"cpu_percent\": 12.3}, ...]"}}
+
+data: {"delta": "Инвентарь получ"}
+

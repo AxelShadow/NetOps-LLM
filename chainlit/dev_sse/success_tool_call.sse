@@ -1,0 +1,10 @@
+data: {"delta": "Проверяю доступность устройства."}
+
+data: {"tool": "ping", "args": {"host": "mock-host"}}
+
+data: {"tool_result": {"name": "ping", "ok": true, "preview": "{\"host\": \"mock-host\", \"reachable\": true, \"output\": \"Обмен пакетами с mock-host по 32 байт:\\nОтвет от 192.0.2.10: число байт=32 время=1мс TTL=63\\n...\\nОтправлено = 4, получено = 4, потеряно = 0 (0% потерь)\"}"}}
+
+data: {"delta": "mock-host доступен: 4/4 пакета, 0% потерь (мок-режим)."}
+
+data: [DONE]
+

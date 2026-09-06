@@ -1,0 +1,75 @@
+# Dev-стек Фазы 12 (migration.md): полный роут-трип
+# / -> nginx -> /chat -> chainlit -> backend — без реальных
+# LLM/Zabbix/VMware: мок-инструменты (NETOPS_MOCK_MODE), авторизация
+# мимо AD (NETOPS_DEV_MODE, любой пароль), sqlite вместо Postgres.
+#
+# Запуск:   docker compose -f docker-compose.dev.yml up --build
+# Фикстуры: docker compose -f docker-compose.dev.yml run --rm seed
+#
+# Секреты НЕ требуются: dev-значения по умолчанию. БД — sqlite
+# в именованном томе devdata (сброс: docker compose ... down -v).
+
+services:
+  app:
+    build: ./backend
+    environment:
+      # sqlite в контейнере: ./data/netops.db (том ниже)
+      NETOPS_DATABASE_URL: sqlite:////data/netops.db
+      NETOPS_DEV_MODE: "true"          # логин мимо AD, пароль любой
+      NETOPS_MOCK_MODE: "true"         # все 15 инструментов — моки
+      NETOPS_BOOTSTRAP_ADMIN: admin@example.com   # первый админ
+      NETOPS_JWT_SECRET: dev-jwt-secret-change-me
+      NETOPS_INTERNAL_SERVICE_TOKEN: dev-internal-token
+      # LLM/Zabbix адреса не нужны: мок-режим не ходит в сеть
+    volumes:
+      - devdata:/data
+    restart: unless-stopped
+    # контейнеру нужен драйвер sqlite (pysqlite3 в stdlib) — ок
+
+  # Разовый запуск фикстур: пользователи, устройства, диалоги, аудит.
+  # --rm: контейнер сеет и умирает, данные остаются в томе devdata.
+  seed:
+    build: ./backend
+    environment:
+      NETOPS_DATABASE_URL: sqlite:////data/netops.db
+      NETOPS_BOOTSTRAP_ADMIN: admin@example.com
+      NETOPS_JWT_SECRET: dev-jwt-secret-change-me
+    volumes:
+      - devdata:/data
+    depends_on: [app]
+    command: ["python", "seed_dev.py"]
+    restart: "no"
+
+  chainlit:
+    build: ./chainlit
+    environment:
+      FASTAPI_INTERNAL_URL: http://app:8000
+      CHAINLIT_ROOT_PATH: /chat
+      CHAINLIT_AUTH_SECRET: dev-chainlit-auth-secret-change-me
+      NETOPS_INTERNAL_SERVICE_TOKEN: dev-internal-token
+      NETOPS_PROXY_AUTH_SECRET: dev-proxy-auth-secret
+      ENVIRONMENT: development          # chainlit/config.py: dev
+    depends_on: [app]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/chat/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./frontend:/usr/share/nginx/html:ro
+    environment:
+      NETOPS_INTERNAL_SERVICE_TOKEN: dev-internal-token
+      NETOPS_PROXY_AUTH_SECRET: dev-proxy-auth-secret
+    depends_on: [app, chainlit]
+    restart: unless-stopped
+
+volumes:
+  devdata:

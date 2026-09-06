@@ -1,0 +1,14 @@
+data: {"delta": "Проверяю стенд: сначала пинг, затем инвентарь VMware."}
+
+data: {"tool": "ping", "args": {"host": "mock-host"}}
+
+data: {"tool_result": {"name": "ping", "ok": true, "preview": "{\"host\": \"mock-host\", \"reachable\": true, \"output\": \"...0% потерь\"}"}}
+
+data: {"tool": "vmware_vms", "args": {}}
+
+data: {"tool_result": {"name": "vmware_vms", "ok": true, "preview": "[{\"name\": \"srv-app-01\", \"power\": \"poweredOn\", ...}]"}}
+
+data: {"delta": "Итог: mock-host доступен, на стенде 15 ВМ (мок-режим)."}
+
+data: [DONE]
+
