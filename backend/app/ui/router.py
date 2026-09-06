@@ -72,8 +72,10 @@ def login_page(request: Request):
         with SessionLocal() as db:
             if load_user_from_token(token, db):
                 return RedirectResponse("/admin/", status_code=303)
+    # is_dev — выбор Tailwind: CDN в dev, локальная сборка в прод (Фаза 13)
     return templates.TemplateResponse(request, "pages/login.html",
-                                      {"request": request, "error": None})
+                                      {"request": request, "error": None,
+                                       "is_dev": get_settings().dev_mode})
 
 
 @router.post("/login")
@@ -85,7 +87,8 @@ def login_submit(request: Request, username: str = Form(...),
     if not user_data:
         return templates.TemplateResponse(
             request, "pages/login.html",
-            {"request": request, "error": "Неверный логин или пароль"},
+            {"request": request, "error": "Неверный логин или пароль",
+             "is_dev": get_settings().dev_mode},
             status_code=401)
 
     upn = user_data["upn"]
@@ -102,7 +105,8 @@ def login_submit(request: Request, username: str = Form(...),
                 return templates.TemplateResponse(
                     request, "pages/login.html",
                     {"request": request,
-                     "error": "Доступ не предоставлен. Обратитесь к администратору."},
+                     "error": "Доступ не предоставлен. Обратитесь к администратору.",
+                     "is_dev": get_settings().dev_mode},
                     status_code=403)
             s = get_settings()
             user = User(username=upn.lower(),
@@ -114,7 +118,8 @@ def login_submit(request: Request, username: str = Form(...),
         elif not user.is_active:
             return templates.TemplateResponse(
                 request, "pages/login.html",
-                {"request": request, "error": "Учётная запись отключена"},
+                {"request": request, "error": "Учётная запись отключена",
+                 "is_dev": get_settings().dev_mode},
                 status_code=403)
 
         token = create_token(user.id, user.username, user.role.value)

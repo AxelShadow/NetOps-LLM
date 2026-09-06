@@ -6,6 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .api.devices import router as devices_router
+from .ui.home import router as home_router
 from .ui.router import router as ui_router
 from .db import Base, engine, SessionLocal
 from .models import User, Role
@@ -95,6 +96,7 @@ app.include_router(chat_router)
 app.include_router(devices_router)
 app.include_router(internal_router)
 app.include_router(ui_router)
+app.include_router(home_router)
 
 from fastapi.responses import JSONResponse  # noqa: E402
 
@@ -123,7 +125,10 @@ _ADMIN_STATIC = Path(__file__).resolve().parent / "static"
 app.mount("/admin/static", StaticFiles(directory=str(_ADMIN_STATIC)),
           name="admin_static")
 
-FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
-if FRONTEND_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR),
-              html=True), name="frontend")
+# Старый SPA — доступен на /legacy (Фаза 14: NETOPS_USE_NEW_UI=false
+# делает его основным). В прод-контейнере frontend/ нет — статику
+# отдаёт nginx, mount тихо пропускается.
+FRONTEND_LEGACY = Path(__file__).resolve().parents[2] / "frontend" / "legacy"
+if FRONTEND_LEGACY.exists():
+    app.mount("/legacy", StaticFiles(directory=str(FRONTEND_LEGACY),
+              html=True), name="frontend_legacy")

@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     # Секрет proxy-авторизации для auth-check (пусто = header-режим
     # Chainlit выключен, работает только логин-форма)
     proxy_auth_secret: str = ""
+    # Фаза 14: true — новый UI (лендинг / -> чат/админка), false — старый SPA
+    use_new_ui: bool = False
 
 
 @lru_cache

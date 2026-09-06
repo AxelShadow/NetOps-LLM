@@ -3,6 +3,9 @@
 # LLM/Zabbix/VMware: мок-инструменты (NETOPS_MOCK_MODE), авторизация
 # мимо AD (NETOPS_DEV_MODE, любой пароль), sqlite вместо Postgres.
 #
+# Фаза 14: NETOPS_USE_NEW_UI=true — / отдаёт лендинг (выбор чата/
+# админки/старого SPA), старый интерфейс доступен на /legacy/.
+#
 # Запуск:   docker compose -f docker-compose.dev.yml up --build
 # Фикстуры: docker compose -f docker-compose.dev.yml run --rm seed
 #
@@ -20,6 +23,8 @@ services:
       NETOPS_BOOTSTRAP_ADMIN: admin@example.com   # первый админ
       NETOPS_JWT_SECRET: dev-jwt-secret-change-me
       NETOPS_INTERNAL_SERVICE_TOKEN: dev-internal-token
+      # Фаза 14: / отдаёт лендинг (новый UI по умолчанию в dev-стеке)
+      NETOPS_USE_NEW_UI: "true"
       # LLM/Zabbix адреса не нужны: мок-режим не ходит в сеть
     volumes:
       - devdata:/data

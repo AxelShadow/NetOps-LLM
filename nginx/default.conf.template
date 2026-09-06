@@ -16,9 +16,37 @@ server {
     listen 80;
     root /usr/share/nginx/html;
 
-    # --- SPA (старый фронтенд) ---
+    # --- Главная /: решает backend по NETOPS_USE_NEW_UI (Фаза 14) ---
+    # false -> 303 /legacy/ (старый SPA основной), true -> лендинг
+    # со ссылками на /chat, /admin/ и /legacy/.
+    location = / {
+        proxy_pass http://app:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # --- Старый SPA: доступен на /legacy до конца миграции (Фаза 14) ---
+    # root уже /usr/share/nginx/html (туда монтируется ./frontend),
+    # SPA лежит в frontend/legacy/index.html -> /legacy/index.html.
+    # try_files с fallback на /legacy/index.html сохраняет SPA-роутинг:
+    # любой /legacy/<путь> отдаёт index.html, роутер JS разрулит.
+    location /legacy/ {
+        try_files $uri /legacy/index.html;
+    }
+
+    # --- Всё прочее с /: backend, статики на / больше нет (Фаза 14) ---
+    # Весь старый SPA перенесён под /legacy/, прежний fallback
+    # try_files /index.html стал бы битым (файла на / больше нет),
+    # а молча отдавать SPA-оболочку на неизвестные пути — неправда.
+    # Поэтому без try_files и named-бэкендов, просто proxy_pass:
+    # что-то известное отдаст FastAPI, неизвестное получит честный 404.
+    # /api/, /admin/, /internal/, /chat длиннее / и матчатся раньше.
     location / {
-        try_files $uri /index.html;
+        proxy_pass http://app:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
     }
 
     # --- FastAPI: REST/SSE ---

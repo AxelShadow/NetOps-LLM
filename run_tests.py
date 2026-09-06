@@ -70,6 +70,7 @@ SUITES: list[tuple[str, Path, Path, list[str], str]] = [
     ("tests/test_agent_tools_rbac.py (Фаза 13)", BE_PY, BACKEND_DIR, ["tests/test_agent_tools_rbac.py"],          "tests/test_agent_tools_rbac.py"),
     ("tests/test_agent_limit.py (Фаза 13)",      BE_PY, BACKEND_DIR, ["tests/test_agent_limit.py"],               "tests/test_agent_limit.py"),
     ("tests/test_e2e_flow.py (Фаза 13)",          BE_PY, BACKEND_DIR, ["tests/test_e2e_flow.py"],                 "tests/test_e2e_flow.py"),
+    ("tests/test_ui_switch.py (Фаза 14)",         BE_PY, BACKEND_DIR, ["tests/test_ui_switch.py"],                "tests/test_ui_switch.py"),
     # --- chainlit: интерпретатор chainlit/.venv, cwd chainlit/ ---
     ("sse_parser_test.py",                   CL_PY, CHAINLIT_DIR, ["sse_parser_test.py"],                         "sse_parser_test.py"),
     ("dev_sse/scenarios_test.py",            CL_PY, CHAINLIT_DIR, ["dev_sse/scenarios_test.py"],                   "dev_sse/scenarios_test.py"),

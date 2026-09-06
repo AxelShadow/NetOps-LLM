@@ -471,6 +471,41 @@ auth_request, всё в docker-compose. Backend — единственный и�
   не тронута (байт-в-байт). Грабля: консоль Windows cp1251 — новым
   тестам нужен sys.stdout.reconfigure(encoding="utf-8").
 
+### Этап 16 — миграция UI, Фаза 14: замена старого интерфейса (готово, 2026-09-07)
+- **config.py**: поле `use_new_ui: bool = False` (env
+  NETOPS_USE_NEW_UI) — флаг Фазы 14; false — старый SPA основной,
+  true — новый UI (лендинг) на `/`.
+- **frontend/index.html → frontend/legacy/index.html** (git mv,
+  история сохранена): старый SPA теперь живёт под `/legacy`
+  (mount StaticFiles в main.py; nginx: try_files с fallback
+  /legacy/index.html — SPA-роутинг сохранён). Удаление — только
+  после live-подтверждения на сервере (Фаза 16), по правилам
+  migration.md.
+- **ui/home.py** (новый): `GET /` — use_new_ui=false → 303 на
+  /legacy/; true → лендинг templates/pages/landing.html (3
+  карточки: Чат /chat, Админка /admin/, Старый интерфейс /legacy/;
+  публичен, standalone как login.html; is_dev → CDN-иначе
+  локальная сборка tailwind.css).
+- **nginx/default.conf.template**: `location = /` → proxy app:8000
+  (главную решает backend по флагу); `location /legacy/` —
+  статика старого SPA; прочий `location /` → proxy без try_files
+  (статики на / больше нет, неизвестные пути — честный 404 от
+  FastAPI).
+- **login.html + router.py**: is_dev-паттерн подключении Tailwind
+  (ранее login.html — всегда CDN, артефакт Фазы 13) — во всех
+  4 рендерах (GET + POST 401/403×2).
+- **docker-compose.dev.yml**: NETOPS_USE_NEW_UI=true (dev-стек
+  проверяет новый путь); прод-compose берёт флаг из .env.
+- **tests/test_ui_switch.py** (8): false → GET / = 303 /legacy/ +
+  GET /legacy/ = 200 + 404 StaticFiles на несуществующий файл;
+  true → лендинг со ссылками /chat, /admin/, /legacy/; cache_clear
+  переключает флаг без рестарта (home.py читает get_settings()
+  в рантайме); GET /admin/login = 200. В runner: 17/17 OK (~1 мин).
+- **.env.example**: NETOPS_USE_NEW_UI=false задокументирован.
+- Прогоны: верификация PASS (состав 13 файлов, порядок
+  роутер-до-mount, raw-ASGI traversal, envsubst-рендер nginx,
+  compose-валидация, изоляция БД — netops.db не тронута).
+
 1. **Zabbix 6.2**: токен работает только параметром `auth` в теле JSON-RPC
    (заголовок Authorization: Bearer — не сработал); URL — http, не https;
    sortfield "clock" у problem.get запрещён; selectHosts у problem.get молча
@@ -569,7 +604,7 @@ build_system_prompt добавляет: текущее время + список
 ## 9. Дорожная карта — что дальше
 
 ### Текущий фокус: миграция UI (migration.md, 16 фаз)
-- Готово: Фазы 0–13 (Этапы 7–15 в §5) — снимок состояния, мок-режим,
+- Готово: Фазы 0–14 (Этапы 7–16 в §5) — снимок состояния, мок-режим,
   /internal/chat/stream, каркас админки /admin/*, контент: инвентарь,
   аудит, настройки, история диалогов; Chainlit-чат через
   /internal/chat/stream + авторизация (auth-check для nginx,
@@ -579,16 +614,15 @@ build_system_prompt добавляет: текущее время + список
   Фаза 12 — dev-стек docker-compose.dev.yml + seed_dev.py +
   SSE-сценарии + чек-лист (docs/dev-checklist.md); Фаза 13 —
   тестирование (test_agent_tools_rbac 13, test_agent_limit 8,
-  adapters_test 11, test_e2e_flow 29, runner run_tests.py 16/16,
-  ручной чек-лист dev-checklist.md).
-- Следующие: Фазы 14–16 (замена старого интерфейса,
-  документация, готовность). Live-проверка nginx/WebSocket и
+  adapters_test 11, test_e2e_flow 29, runner run_tests.py, ручной
+  чек-лист dev-checklist.md); Фаза 14 — замена старого интерфейса:
+  старый SPA на /legacy, лендинг / с выбором (чат/админка/legacy),
+  флаг NETOPS_USE_NEW_UI (false по умолчанию), nginx location = /
+  -> backend, test_ui_switch 8, runner 17/17.
+- Следующие: Фазы 15–16 (документация, готовность). Старый SPA
+  (frontend/legacy/index.html) удаляется только после
+  live-подтверждения на сервере. Live-проверка nginx/WebSocket и
   docker-стека отложена на сервер.
-- Дельта-кандидат (из верификации Этапа 11): length-cap в sub-guard —
-  20-значный sub проходит isdigit() и роняет db.get 500 вместо 401
-  (deps.py + internal.py ×2); правка лежит в рабочем дереве
-  (незакоммичена, вне Фазы 13) — одна строка, но требует валидный
-  JWT-секрет для эксплойта.
 
 ### Ближайший шаг: прямой SNMP для ручных устройств
 - Форма: версия SNMP (v2c community / v3), поля в Device (snmp_version и т.п.).

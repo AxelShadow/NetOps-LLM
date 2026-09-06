@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NetOps LLM</title>
+    {# Tailwind: прод — локальная сборка /admin/static/css/tailwind.css
+       (сгенерирована Tailwind CLI v4, dev\tailwindcss.exe; см. tailwind.src.css);
+       CDN — только в dev-режиме, чтобы жить без пересборки при правках классов.
+       Лендинг публичен (до логина), как login.html — standalone, без base.html. #}
+    {% if is_dev %}
+    <script src="https://cdn.tailwindcss.com"></script>
+    {% else %}
+    <link rel="stylesheet" href="/admin/static/css/tailwind.css">
+    {% endif %}
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen flex items-center justify-center">
+<div class="w-full max-w-3xl px-4">
+    <div class="text-center mb-8">
+        <h1 class="text-3xl font-bold mb-1">NetOps <span class="text-sky-500">LLM</span></h1>
+        <p class="text-sm text-slate-500">Выберите интерфейс</p>
+    </div>
+    <div class="grid gap-4 sm:grid-cols-3">
+        <a href="/chat"
+           class="bg-white rounded-xl shadow-md p-6 block hover:shadow-lg transition text-center">
+            <h2 class="text-lg font-semibold text-sky-600 mb-2">Чат (Chainlit)</h2>
+            <p class="text-sm text-slate-500">Диалог с ИТ-ассистентом по инфраструктуре</p>
+        </a>
+        <a href="/admin/"
+           class="bg-white rounded-xl shadow-md p-6 block hover:shadow-lg transition text-center">
+            <h2 class="text-lg font-semibold text-sky-600 mb-2">Админка</h2>
+            <p class="text-sm text-slate-500">Инвентарь, аудит, диалоги и настройки</p>
+        </a>
+        <a href="/legacy/"
+           class="bg-white rounded-xl shadow-md p-6 block hover:shadow-lg transition text-center">
+            <h2 class="text-lg font-semibold text-sky-600 mb-2">Старый интерфейс</h2>
+            <p class="text-sm text-slate-500">Прежний SPA-монолит на одной странице</p>
+        </a>
+    </div>
+    <p class="text-center text-xs text-slate-400 mt-8">NetOps LLM</p>
+</div>
+</body>
+</html>

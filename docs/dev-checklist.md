@@ -1,4 +1,4 @@
-# Чек-лист локальной проверки (Фазы 12–13, migration.md)
+# Чек-лист локальной проверки (Фазы 12–14, migration.md)
 
 Полный роут-трип dev-стека без реальных LLM/Zabbix/VMware:
 мок-инструменты (`NETOPS_MOCK_MODE`), логин мимо AD (`NETOPS_DEV_MODE`,
@@ -82,3 +82,30 @@ cd backend && .venv/Scripts/python.exe tests/test_e2e_flow.py
 как «admin/engineer» — по факту кода (`require_roles_page(Role.admin)`
 в ui/router.py + NAV_ITEMS) раздел доступен только admin, engineer
 получает 403. Строка выше исправлена.
+
+## Фаза 14: переключение интерфейсов (/ и /legacy)
+
+Старый SPA перенесён на `/legacy` (frontend/legacy/index.html), `/`
+решает backend по флагу `NETOPS_USE_NEW_UI` (config.py):
+`false` (дефолт, прод-режим) — редирект 303 на `/legacy/`;
+`true` (dev-стек) — лендинг с выбором: чат, админка, старый интерфейс.
+
+Автоматическая часть — `backend/tests/test_ui_switch.py` (TestClient,
+временная sqlite, оба значения флага):
+
+```bash
+cd backend && .venv/Scripts/python.exe tests/test_ui_switch.py
+```
+
+Ручная часть (визуальная, через nginx dev-стека):
+
+| № | Что проверить | Как | Ожидание |
+|---|---------------|-----|----------|
+| 1 | Старый интерфейс на /legacy | http://localhost:8080/legacy/ | Открывается старый SPA («NetOps LLM»), навигация работает |
+| 2 | Главная / — новый UI | http://localhost:8080/ (dev-стек: NETOPS_USE_NEW_UI=true) | Лендинг: карточки «Чат», «Админка», «Старый интерфейс» |
+| 3 | Главная / — старый режим | Снять флаг (NETOPS_USE_NEW_UI=false, пересоздать контейнер app) и открыть / | Редирект на /legacy/ |
+| 4 | Ссылки лендинга живые | Кликнуть «Чат» и «Админка» на лендинге | /chat открывается (после логина), /admin/ — форма входа |
+| 5 | nginx-стек целиком | `docker compose -f docker-compose.dev.yml up --build -d` + сид, затем / и /legacy/ через порт 8080 | Оба пути отвечают (проверки 1–2 выше) |
+
+Прод (docker-compose.yml): флаг задаётся оператором через `.env`
+(`NETOPS_USE_NEW_UI=true/false`), в compose-файле не зашит.
