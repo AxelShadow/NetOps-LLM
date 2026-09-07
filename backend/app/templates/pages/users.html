@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Пользователи — NetOps Admin{% endblock %}
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold">Пользователи</h1>
+    <p class="text-sm text-slate-500">Предоставление доступа и роли (admin)</p>
+</div>
+
+{# inline-форма добавления: раскрывается по кнопке «Добавить».
+   Обычный POST (без CSRF: cookie SameSite=Lax); ошибки валидации
+   возвращают страницу повторно — с открытой формой и текстом ошибки. #}
+<div class="bg-white rounded-xl shadow-sm p-4 mb-4">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+        <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400">
+            Новый пользователь</h2>
+        <button type="button" id="users-add-toggle"
+                class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
+                onclick="var f=document.getElementById('users-add-form');
+                         f.classList.toggle('hidden');
+                         this.textContent=f.classList.contains('hidden')
+                             ? '+ Добавить' : 'Свернуть';">
+            + Добавить
+        </button>
+    </div>
+    <form id="users-add-form" method="post" action="/admin/users/add"
+          class="grid gap-3 md:grid-cols-4 mt-4 {% if not form_error %}hidden{% endif %}">
+        {% if form_error %}
+        <div class="md:col-span-4 px-4 py-2.5 rounded-md bg-red-50 border border-red-200 text-sm text-red-800">
+            {{ form_error }}
+        </div>
+        {% endif %}
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="u-username">Логин *</label>
+            <input id="u-username" name="username" type="text" required
+                   placeholder="user@{{ user.username.split('@')[1] if '@' in user.username else 'domain' }}"
+                   value="{{ form_values.username or '' }}"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="u-display">Отображаемое имя</label>
+            <input id="u-display" name="display_name" type="text" placeholder="Иван Иванов"
+                   value="{{ form_values.display_name or '' }}"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="u-role">Роль</label>
+            <select id="u-role" name="role"
+                    class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                {% for r in roles %}
+                <option value="{{ r }}" {% if form_values.role == r or (not form_values.role and r == 'viewer') %}selected{% endif %}>{{ r }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="flex items-end">
+            <button type="submit"
+                    class="px-4 py-1.5 rounded-md bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700">
+                Создать
+            </button>
+        </div>
+    </form>
+</div>
+
+{# Контейнер таблицы: рендерится серверно (users уже в контексте),
+   обновляется HTMX при смене роли/активности (hx-target="#users-table"). #}
+<div id="users-table">
+    {% include "components/users/table.html" %}
+</div>
+{% endblock %}

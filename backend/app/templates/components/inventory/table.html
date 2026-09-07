@@ -10,6 +10,17 @@
     <table class="w-full text-sm">
         <thead>
             <tr class="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-200">
+                {% if user.role.value == 'admin' %}
+                <th class="px-3 py-2.5">
+                    {# «Выбрать все»: живёт в thead, который HTMX
+                       заменяет вместе с tbody — обычный onclick без
+                       делегирования не годится, но атрибут onclick
+                       инлайнится в свапнутый DOM, поэтому работает
+                       и после обновления таблицы. #}
+                    <input type="checkbox" id="select-all" title="Выбрать все"
+                           onclick="InvBulk.toggleAll(this)">
+                </th>
+                {% endif %}
                 <th class="px-3 py-2.5">Имя</th>
                 <th class="px-3 py-2.5">Тип</th>
                 <th class="px-3 py-2.5">Адрес</th>
@@ -22,6 +33,12 @@
         <tbody>
             {% for d in devices %}
             <tr class="border-b border-slate-100 hover:bg-slate-50">
+                {% if user.role.value == 'admin' %}
+                <td class="px-3 py-2">
+                    <input type="checkbox" class="device-check" name="ids"
+                           value="{{ d.id }}">
+                </td>
+                {% endif %}
                 <td class="px-3 py-2 font-medium whitespace-nowrap" title="{{ d.description or '' }}">{{ d.name }}</td>
                 <td class="px-3 py-2 whitespace-nowrap">{{ d.type.value if d.type.value else d.type }}</td>
                 <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ d.host }}:{{ d.port }}</td>

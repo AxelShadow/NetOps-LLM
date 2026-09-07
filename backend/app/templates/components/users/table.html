@@ -1,0 +1,81 @@
+{# HTMX-фрагмент: таблица пользователей.
+   Ожидает: users (list[dict]: id/username/display_name/role/is_active/
+   granted_by/granted_at), roles (список строк), current_user_id,
+   flash (str|None или [текст, тип]).
+
+   Ответ на hx-post /admin/users/{id}/role и .../{id}/active заменяет
+   innerHTML #users-table: строки и flash обновляются без перезагрузки.
+   Селект роли отправляется сам при изменении (hx-trigger="change"),
+   toggle — кнопка с hx-vals. #}
+{% include "components/flash.html" %}
+<div class="bg-white rounded-xl shadow-sm overflow-x-auto">
+    {% if users %}
+    <table class="w-full text-sm">
+        <thead>
+            <tr class="text-left text-xs uppercase tracking-wide text-slate-400 border-b-2 border-b-slate-200">
+                <th class="px-3 py-2.5">Пользователь</th>
+                <th class="px-3 py-2.5">Роль</th>
+                <th class="px-3 py-2.5">Активен</th>
+                <th class="px-3 py-2.5">Предоставил</th>
+                <th class="px-3 py-2.5">Дата</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for u in users %}
+            <tr class="border-b border-slate-100 hover:bg-slate-50 {% if not u.is_active %}opacity-60{% endif %}">
+                <td class="px-3 py-2 font-medium whitespace-nowrap">
+                    {{ u.username }}
+                    {% if u.display_name %}
+                    <span class="block text-xs text-slate-500">{{ u.display_name }}</span>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-2 whitespace-nowrap">
+                    {% if u.id == current_user_id %}
+                    {# сам себя: селект заблокирован, менять роль нельзя #}
+                    <select disabled title="Нельзя менять себя"
+                            class="text-sm rounded-md border border-slate-300 px-2 py-1.5 bg-slate-100 text-slate-500">
+                        {% for r in roles %}
+                        <option value="{{ r }}" {% if u.role == r %}selected{% endif %}>{{ r }}</option>
+                        {% endfor %}
+                    </select>
+                    {% else %}
+                    <select name="role"
+                            class="text-sm rounded-md border border-slate-300 px-2 py-1.5"
+                            hx-post="/admin/users/{{ u.id }}/role" hx-trigger="change"
+                            hx-target="#users-table">
+                        {% for r in roles %}
+                        <option value="{{ r }}" {% if u.role == r %}selected{% endif %}>{{ r }}</option>
+                        {% endfor %}
+                    </select>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-2 whitespace-nowrap">
+                    {% if u.id == current_user_id %}
+                    {# сам себя: toggle заблокирован, деактивироваться нельзя #}
+                    <button type="button" disabled title="Нельзя менять себя"
+                            class="px-2.5 py-1 rounded-md border border-slate-300 text-xs font-medium bg-slate-100 text-slate-400 cursor-not-allowed">
+                        {% if u.is_active %}активен{% else %}заблокирован{% endif %}
+                    </button>
+                    {% elif u.is_active %}
+                    <button type="button"
+                            class="px-2.5 py-1 rounded-md border border-slate-300 hover:bg-slate-100 text-xs font-medium"
+                            hx-post="/admin/users/{{ u.id }}/active" hx-vals='{"active": "off"}'
+                            hx-target="#users-table">Заблокировать</button>
+                    {% else %}
+                    <button type="button"
+                            class="px-2.5 py-1 rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-xs font-medium"
+                            hx-post="/admin/users/{{ u.id }}/active" hx-vals='{"active": "on"}'
+                            hx-target="#users-table">Разблокировать</button>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ u.granted_by or "—" }}</td>
+                <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ u.granted_at }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="p-8 text-center text-slate-400">Пользователей нет</div>
+    {% endif %}
+</div>
+<p class="mt-2 text-xs text-slate-400">Всего: {{ users|length }}</p>

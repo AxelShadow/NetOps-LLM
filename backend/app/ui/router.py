@@ -1,8 +1,8 @@
 """Серверная админка на FastAPI + Jinja2 + HTMX (Фаза 2 миграции).
 
 Маршруты /admin/*: логин/логаут (JWT в HttpOnly-cookie netops_token),
-каркас разделов (dashboard/инвентарь/диалоги/аудит/настройки) с серверным
-RBAC. Контент разделов наполняется в Фазах 3-5; старый SPA
+каркас разделов (dashboard/инвентарь/диалоги/пользователи/аудит/настройки)
+с серверным RBAC. Контент разделов наполняется в Фазах 3-5; старый SPA
 (frontend/index.html) продолжает работать через /api/* без изменений.
 """
 import asyncio
@@ -24,6 +24,7 @@ from ..models import AuditLog, Conversation, Device, DeviceType, Message, \
     Role, User
 from ..auth.ldap_auth import ad_authenticate
 from ..auth.jwt_utils import create_token
+from ..auth.routes import _normalize
 from .deps import COOKIE_NAME, load_user_from_token, get_current_user_page, \
     require_roles_page
 
@@ -39,6 +40,7 @@ NAV_ITEMS = [
     ("Чат", "/chat", {Role.admin, Role.engineer, Role.viewer}),  # Chainlit (Фаза 6+)
     ("Инвентарь", "/admin/inventory", {Role.admin, Role.engineer}),
     ("История диалогов", "/admin/conversations", {Role.admin, Role.engineer}),
+    ("Пользователи", "/admin/users", {Role.admin}),
     ("Аудит", "/admin/audit", {Role.admin}),
     ("Настройки", "/admin/settings", {Role.admin}),
 ]
@@ -145,9 +147,14 @@ def dashboard(request: Request,
 
 @router.get("/inventory")
 def inventory_page(request: Request,
+                   flash: str | None = Query(default=None),
                    user: User = Depends(require_roles_page(
                        Role.admin, Role.engineer))):
-    return _render(request, user, "pages/inventory.html", {})
+    """flash — сообщение после массового вкл/выкл (POST /inventory/bulk):
+    PRG-редирект передаёт его query-параметром, отображает components/
+    flash.html в base.html. Живёт до следующей навигации."""
+    ctx = {"flash": [flash, "success"]} if flash else {}
+    return _render(request, user, "pages/inventory.html", ctx)
 
 
 @router.get("/conversations")
@@ -608,6 +615,173 @@ def conversation_details(request: Request,
         })
 
 
+# --- Пользователи: страница и управление (паритет со старым SPA) ------------
+
+_USER_ROLES = [Role.viewer, Role.engineer, Role.admin]
+
+
+def _users_list(db: Session) -> list[dict]:
+    """Все пользователи для таблицы (username-сортировка, даты локально)."""
+    rows = []
+    for u in db.query(User).order_by(User.username).all():
+        granted = u.granted_at
+        if granted is not None and granted.tzinfo is not None:
+            granted = granted.astimezone().replace(tzinfo=None)
+        rows.append({
+            "id": u.id,
+            "username": u.username,
+            "display_name": u.display_name or "",
+            "role": u.role.value,
+            "is_active": bool(u.is_active),
+            "granted_by": u.granted_by or "",
+            "granted_at": granted.strftime("%d.%m.%Y %H:%M")
+                          if granted else "—",
+        })
+    return rows
+
+
+def _users_ctx(user: User, db: Session) -> dict:
+    """Общий контекст страницы/партиала: список + роли + «сам себя»."""
+    return {
+        "users": _users_list(db),
+        "roles": [r.value for r in _USER_ROLES],
+        "current_user_id": user.id,
+    }
+
+
+def _users_rows(request: Request, user: User, db: Session,
+                flash: list | None = None):
+    """HTMX-фрагмент таблицы (components/users/table.html).
+
+    Ответ на hx-post смены роли/активности: заменяет содержимое
+    #users-table (hx-target, innerHTML по умолчанию).
+    """
+    return templates.TemplateResponse(
+        request, "components/users/table.html",
+        _ctx(request, user, flash=flash, **_users_ctx(user, db)))
+
+
+def _users_page(request: Request, user: User, db: Session,
+                form_error: str | None = None,
+                form_values: dict | None = None,
+                status_code: int = 200):
+    """Полная страница: таблица + inline-форма добавления.
+
+    form_error/form_values — повторный рендер с открытой формой,
+    когда POST /users/add не прошёл валидацию (дубль/пустой логин).
+    """
+    ctx = _users_ctx(user, db)
+    ctx.update({
+        "form_error": form_error,
+        "form_values": form_values or {},
+    })
+    return _render(request, user, "pages/users.html", ctx,
+                   status_code=status_code)
+
+
+@router.get("/users")
+def users_page(request: Request,
+               db: Session = Depends(get_db),
+               user: User = Depends(require_roles_page(Role.admin))):
+    return _users_page(request, user, db)
+
+
+@router.post("/users/{uid}/role")
+async def users_change_role(uid: int, request: Request,
+                            db: Session = Depends(get_db),
+                            user: User = Depends(require_roles_page(
+                                Role.admin))):
+    """Смена роли — та же защита, что PATCH /api/users/{uid}.
+
+    Свою роль менять нельзя: иначе админ сам себя разжалует и
+    потеряет доступ к странице (uid == user.id -> 400).
+    """
+    data = dict(await request.form())
+    try:
+        new_role = Role(data.get("role", ""))
+    except ValueError:
+        raise HTTPException(400, "Неверная роль (viewer/engineer/admin)")
+    u = db.get(User, uid)
+    if not u:
+        raise HTTPException(404, "Пользователь не найден")
+    if u.id == user.id:
+        raise HTTPException(400, "Нельзя менять свою роль")
+    u.role = new_role
+    db.commit()
+    return _users_rows(request, user, db, flash=[
+        f"Роль обновлена: {u.username} → {new_role.value}", "success"])
+
+
+@router.post("/users/{uid}/active")
+async def users_toggle_active(uid: int, request: Request,
+                              db: Session = Depends(get_db),
+                              user: User = Depends(require_roles_page(
+                                  Role.admin))):
+    """Блокировка/разблокировка — как PATCH /api/users/{uid} (is_active).
+
+    Само-деактивация запрещена (uid == user.id -> 400): иначе
+    админ вылетит со страницы — load_user_from_token не пускает
+    неактивных.
+    """
+    data = dict(await request.form())
+    active = data.get("active")
+    if active not in ("on", "off"):
+        raise HTTPException(400, "Ожидается active=on|off")
+    u = db.get(User, uid)
+    if not u:
+        raise HTTPException(404, "Пользователь не найден")
+    if u.id == user.id:
+        raise HTTPException(400, "Нельзя деактивировать самого себя")
+    u.is_active = active == "on"
+    db.commit()
+    state = "разблокирован" if u.is_active else "заблокирован"
+    return _users_rows(request, user, db, flash=[
+        f"Пользователь {u.username} {state}", "success"])
+
+
+@router.post("/users/add")
+async def users_add(request: Request,
+                    db: Session = Depends(get_db),
+                    user: User = Depends(require_roles_page(Role.admin))):
+    """Добавление — нормализация и дубль-проверка как POST /api/users.
+
+    Обычная форма-POST (без CSRF: cookie SameSite=Lax). Успех —
+    PRG-редирект на /users; ошибка — повторный рендер страницы с
+    открытой формой, введёнными значениями и текстом ошибки.
+    """
+    data = dict(await request.form())
+    username_raw = (data.get("username") or "").strip()
+    if not username_raw:
+        return _users_page(request, user, db, form_error="Логин обязателен",
+                           form_values=data, status_code=400)
+    try:
+        name = _normalize(username_raw)
+    except HTTPException as e:
+        return _users_page(request, user, db, form_error=e.detail,
+                           form_values=data, status_code=e.status_code)
+    if not name:
+        return _users_page(request, user, db, form_error="Логин обязателен",
+                           form_values=data, status_code=400)
+    try:
+        new_role = Role(data.get("role") or Role.viewer.value)
+    except ValueError:
+        return _users_page(request, user, db, form_error="Неверная роль",
+                           form_values=data, status_code=400)
+    if db.query(User).filter(User.username == name).first():
+        return _users_page(
+            request, user, db,
+            form_error=f"Пользователь «{name}» уже добавлен",
+            form_values=data, status_code=409)
+    u = User(username=name,
+             display_name=(data.get("display_name") or "").strip() or name,
+             role=new_role, granted_by=user.username)
+    db.add(u)
+    db.commit()
+    log.info("Пользователь добавлен через админку: %s (%s)",
+             name, new_role.value)
+    return RedirectResponse("/admin/users", status_code=303)
+
+
 # 401/403 обрабатываются на уровне приложения (main.py): FastAPI не
 # позволяет вешать exception_handler на APIRouter. Для /admin/* 401
 # превращается в редирект на логин, 403 — в HTML-страницу (не JSON).
@@ -848,3 +1022,54 @@ def inventory_delete(device_id: int, request: Request,
     return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
                      source_f=None, status_f=None, group_f=None,
                      flash=f"Устройство удалено: {name}")
+
+
+def _plural_devices(n: int) -> str:
+    """Русская плюрализация: 1 устройство / 2 устройства / 5 устройств."""
+    if n % 10 == 1 and n % 100 != 11:
+        return "устройство"
+    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):
+        return "устройства"
+    return "устройств"
+
+
+@router.post("/inventory/bulk")
+async def inventory_bulk(request: Request,
+                         db: Session = Depends(get_db),
+                         user: User = Depends(require_roles_page(Role.admin))):
+    """Массовое включение/выключение (паритет PATCH /api/devices/bulk).
+
+    Форма из панели массовых действий (pages/inventory.html): ids —
+    скрытые поля по одному на устройство (или строка «1,3,5»),
+    enabled=on|off. Успех — PRG-редирект на /inventory: частичный
+    HTMX-ответ не годится (query-параметры фильтров при POST теряются),
+    полная перезагрузка страницы показывает flash из query-параметра.
+    """
+    form = await request.form()
+    enabled = form.get("enabled")
+    if enabled not in ("on", "off"):
+        raise HTTPException(400, "Ожидается enabled=on|off")
+    ids: list[int] = []
+    for raw in form.getlist("ids"):
+        for part in str(raw).split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if not part.isdigit():
+                raise HTTPException(400,
+                                    f"Неверный id устройства: «{part}»")
+            ids.append(int(part))
+    if not ids:
+        raise HTTPException(400, "Выберите устройства")
+    n = (db.query(Device)
+         .filter(Device.id.in_(ids))
+         .update({Device.enabled: enabled == "on"},
+                 synchronize_session=False))
+    db.commit()
+    # FIX-03: набор активных vCenter изменился — сессии могли устареть
+    _invalidate_vmware_cache()
+    log.info("Bulk enabled=%s от %s: обновлено %d устройств",
+             enabled, user.username, n)
+    msg = f"Обновлено {n} {_plural_devices(n)}" if n else "Устройства не найдены"
+    return RedirectResponse(f"/admin/inventory?flash={quote(msg)}",
+                            status_code=303)

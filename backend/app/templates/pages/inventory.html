@@ -74,6 +74,22 @@
             ⟳ Синхронизировать с Zabbix
         </button>
     </div>
+    {# Массовые действия: чекбоксы в таблице (components/inventory/table.html),
+       отправка — JS InvBulk (скрипт внизу страницы), не <form> — чтобы
+       не конфликтовать с HTMX-фильтрами #}
+    <div class="flex flex-wrap items-center gap-2 mt-3">
+        <span class="text-sm text-slate-600">Выбрано: <span id="sel-count">0</span></span>
+        <button type="button"
+                onclick="InvBulk.submit('on')"
+                class="px-3 py-1.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium transition">
+            Включить выбранные
+        </button>
+        <button type="button"
+                onclick="InvBulk.submit('off')"
+                class="px-3 py-1.5 rounded-md bg-slate-700 text-white text-sm font-medium transition">
+            Выключить выбранные
+        </button>
+    </div>
     {% endif %}
 </div>
 
@@ -87,4 +103,82 @@
 
 {# Модальное окно (форма добавления/редактирования): наполняется HTMX #}
 <div id="inventory-modal" style="display: contents"></div>
+
+{% if user.role.value == 'admin' %}
+{# Невидимая форма bulk-действия: JS (InvBulk.submit) наполняет её скрытыми
+   полями ids по числу отмеченных чекбоксов и сабмитит. Обычный POST ->
+   303-редирект -> полная перезагрузка с flash (Фаза миграции: PRG). #}
+<form id="bulk-form" method="post" action="/admin/inventory/bulk" class="hidden">
+    <input type="hidden" name="enabled" value="on">
+</form>
+
+<script>
+InvBulk = {
+    /* Пересчёт отмеченных чекбоксов -> счётчик «Выбрано». Вызывается
+       делегированным change-слушателем (document) и после HTMX-свапа
+       #inventory-table (htmx:afterSwap) — переживает замену tbody. */
+    recount: function () {
+        var boxes = document.querySelectorAll('#inventory-table .device-check');
+        var n = 0;
+        boxes.forEach(function (b) { if (b.checked) n++; });
+        var el = document.getElementById('sel-count');
+        if (el) el.textContent = n;
+        return n;
+    },
+
+    /* «Выбрать все»: отмечает/снимает все .device-check на текущей
+       странице таблицы. Инлайн-onclick — свапается вместе с thead,
+       отдельное делегирование не требуется. */
+    toggleAll: function (master) {
+        document.querySelectorAll('#inventory-table .device-check')
+            .forEach(function (b) { b.checked = master.checked; });
+        InvBulk.recount();
+    },
+
+    /* Сбор отмеченных ids и submit невидимой формы. */
+    submit: function (enabled) {
+        var ids = [];
+        document.querySelectorAll('#inventory-table .device-check:checked')
+            .forEach(function (b) { ids.push(b.value); });
+        if (!ids.length) {
+            alert('Выберите устройства');
+            return;
+        }
+        if (!confirm(enabled === 'on'
+                ? 'Включить выбранные устройства (' + ids.length + ')?'
+                : 'Выключить выбранные устройства (' + ids.length + ')?')) {
+            return;
+        }
+        var form = document.getElementById('bulk-form');
+        /* пересоздание скрытых полей ids (старые от прошлого сабмита) */
+        form.querySelectorAll('input[name="ids"]').forEach(function (i) { i.remove(); });
+        ids.forEach(function (id) {
+            var inp = document.createElement('input');
+            inp.type = 'hidden';
+            inp.name = 'ids';
+            inp.value = id;
+            form.appendChild(inp);
+        });
+        form.querySelector('input[name="enabled"]').value = enabled;
+        form.submit();
+    }
+};
+
+/* Делегирование change: чекбоксы живут в HTMX-партиале, слушатель на
+   document переживает свапы #inventory-table. Плюс пересчёт после
+   каждого свапа: свежие строки приходят с пустыми чекбоксами, счётчик
+   обязан сбрасываться в 0 (иначе висит число с прошлой страницы). */
+document.addEventListener('change', function (ev) {
+    if (ev.target && ev.target.classList
+            && ev.target.classList.contains('device-check')) {
+        InvBulk.recount();
+    }
+});
+document.addEventListener('htmx:afterSwap', function (ev) {
+    if (ev.target && ev.target.id === 'inventory-table') {
+        InvBulk.recount();
+    }
+});
+</script>
+{% endif %}
 {% endblock %}

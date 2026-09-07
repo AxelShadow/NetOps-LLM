@@ -63,6 +63,7 @@ SUITES: list[tuple[str, Path, Path, list[str], str]] = [
     ("internal_ext_test.py",                 BE_PY, BACKEND_DIR, ["internal_ext_test.py"],                        "internal_ext_test.py"),
     ("admin_ui_test.py",                     BE_PY, BACKEND_DIR, ["admin_ui_test.py"],                            "admin_ui_test.py"),
     ("tests/test_admin_ui_inventory.py",     BE_PY, BACKEND_DIR, ["tests/test_admin_ui_inventory.py"],             "tests/test_admin_ui_inventory.py"),
+    ("tests/test_admin_ui_inventory_bulk.py", BE_PY, BACKEND_DIR, ["tests/test_admin_ui_inventory_bulk.py"],         "tests/test_admin_ui_inventory_bulk.py"),
     ("tests/test_admin_ui_audit.py",         BE_PY, BACKEND_DIR, ["tests/test_admin_ui_audit.py"],                 "tests/test_admin_ui_audit.py"),
     ("tests/test_admin_ui_settings.py",      BE_PY, BACKEND_DIR, ["tests/test_admin_ui_settings.py"],              "tests/test_admin_ui_settings.py"),
     ("tests/test_admin_ui_conversations.py", BE_PY, BACKEND_DIR, ["tests/test_admin_ui_conversations.py"],         "tests/test_admin_ui_conversations.py"),

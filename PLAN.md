@@ -471,6 +471,42 @@ auth_request, всё в docker-compose. Backend — единственный и�
   не тронута (байт-в-байт). Грабля: консоль Windows cp1251 — новым
   тестам нужен sys.stdout.reconfigure(encoding="utf-8").
 
+### Этап 17 — паритет новой админки со старым SPA: пользователи + bulk-инвентарь (готово, 2026-09-07)
+- **Контекст**: после Фазы 14 (live-проверка на сервере) пользователь
+  обнаружил, что в новой админке нет двух возможностей старого SPA:
+  управление ролями/активностью пользователей и массовое вкл/выкл
+  устройств. Backend API уже всё умел (PATCH /api/users/{uid},
+  PATCH /api/devices/bulk) — недостало только UI. Живые фиксы
+  прод-окружения по ходу: WEB_PORT (6b47e35), nginx Host
+  $http_host (6b447e5), absolute_redirect off (9b2d8ed — редирект
+  /chat→/chat/ терял нестандартный порт), проверка Zabbix на
+  /api_jsonrpc.php вместо корня (91ac1e0 — был JSONDecodeError
+  на HTML-ответе).
+- **Страница «Пользователи» /admin/users** (admin-only, в navbar
+  из NAV_ITEMS): таблица (username+display_name, роль-select
+  hx-trigger=change, toggle блокировки, granted_by/at);
+  POST /admin/users/{uid}/role и /{uid}/active — та же логика,
+  что API: само-смена роли и само-деактивация запрещены (400),
+  своя строка в UI disabled; POST /users/add (нормализация
+  _normalize, дубль 409, PRG-303, inline-форма с повторным
+  рендером при ошибках). Верификатор: 34 проверки — PASS.
+- **Чекбоксы инвентаря + bulk**: в таблице (партиал) колонка
+  чекбоксов admin-only + «выбрать все»; панель «Выбрано: N» +
+  кнопки Вкл/Выкл выбранные (confirm, невидимая form, JS
+  InvBulk — делегирование change на document, пересчёт по
+  htmx:afterSwap); POST /admin/inventory/bulk (ids строкой
+  «1,3» или многократным полем, enabled=on|off, пусто → 400,
+  update + clear_cache/FIX-03, PRG-303 c flash «Обновлено N
+  устройств» cо склонением). Верификатор: 20/20 тест +
+  adversarial (инъекции, orphan-ids, idempotency) — PASS.
+- **test_admin_ui_inventory_bulk.py** (20) в runner — 18/18
+  (~1 мин 13с). Tailwind.css пересобран (классы новых
+  шаблонов подтверждены grep'ом в сборке).
+- Верификатор нашёл предсуществующий (не регресс этой работы)
+  дефект: int64-overflow uid/ids («999…9» × 20) → 500 на
+  /admin/users/*, /admin/inventory/bulk и старых API-роутах —
+  кандидат в отдельный FIX-NN (len-cap, как в jwt sub-guard).
+
 ### Этап 16 — миграция UI, Фаза 14: замена старого интерфейса (готово, 2026-09-07)
 - **config.py**: поле `use_new_ui: bool = False` (env
   NETOPS_USE_NEW_UI) — флаг Фазы 14; false — старый SPA основной,
