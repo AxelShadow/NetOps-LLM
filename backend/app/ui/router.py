@@ -279,8 +279,10 @@ async def settings_check_zabbix(request: Request,
                           "Задайте NETOPS_ZABBIX_URL и NETOPS_ZABBIX_TOKEN")
     try:
         async with httpx.AsyncClient(timeout=_CHECK_TIMEOUT) as client:
+            # JSON-RPC endpoint Zabbix — тот же, что в devices/zabbix.py
+            # (иначе POST уходит на фронтенд Zabbix и ловит HTML вместо JSON)
             resp = await client.post(
-                s.zabbix_url,
+                s.zabbix_url.rstrip("/") + "/api_jsonrpc.php",
                 json={"jsonrpc": "2.0", "method": "apiinfo.version",
                       "params": {}, "id": 1})
             resp.raise_for_status()
