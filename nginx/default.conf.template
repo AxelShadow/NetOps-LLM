@@ -16,6 +16,12 @@ server {
     listen 80;
     root /usr/share/nginx/html;
 
+    # Редиректы (добавление слэша /chat -> /chat/ и пр.) nginx по умолчанию
+    # делает АБСОЛЮТНЫМИ (Location: http://host/chat/) — из $host БЕЗ порта.
+    # За нестандартным портом (напр. WEB_PORT=8081) браузер уходит на :80.
+    # Относительный Location браузер сам склеивает с текущим хостом:портом.
+    absolute_redirect off;
+
     # --- Главная /: решает backend по NETOPS_USE_NEW_UI (Фаза 14) ---
     # false -> 303 /legacy/ (старый SPA основной), true -> лендинг
     # со ссылками на /chat, /admin/ и /legacy/.
