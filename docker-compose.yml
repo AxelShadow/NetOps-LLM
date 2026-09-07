@@ -40,7 +40,8 @@ services:
   web:
     image: nginx:alpine
     ports:
-      - "8080:80"
+      # Порт наружу задаётся окружением сервера (.env: WEB_PORT=8081), дефолт 8080
+      - "${WEB_PORT:-8080}:80"
     volumes:
       # Шаблон прогоняется entrypoint-скриптом nginx через envsubst:
       # переменные NETOPS_* берутся из environment ниже.
