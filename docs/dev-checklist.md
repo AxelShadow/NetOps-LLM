@@ -109,3 +109,37 @@ cd backend && .venv/Scripts/python.exe tests/test_ui_switch.py
 
 Прод (docker-compose.yml): флаг задаётся оператором через `.env`
 (`NETOPS_USE_NEW_UI=true/false`), в compose-файле не зашит.
+
+## Этап SNMP: подключение по SNMP (v2c) и скилл принтеров
+
+Сетевые устройства (eltex/mikrotik/usergate) и принтеры опрашиваются
+по SNMPv2c. Community хранится в инвентаре (колонки `devices.snmp_version`
+/ `snmp_community`, авто-миграция `_ensure_device_columns` при старте;
+тип устройства `printer` — `ALTER TYPE ... ADD VALUE IF NOT EXISTS`).
+
+Автоматическая часть (мок-режим, временная sqlite):
+
+```bash
+cd backend && .venv/Scripts/python.exe tests/test_snmp_migration.py
+cd backend && .venv/Scripts/python.exe tests/test_snmp_tools.py
+```
+
+Инструменты агента (tools.py): `snmp_info` (sysDescr/sysName/sysContact/
+sysLocation/sysUpTime), `snmp_interfaces` (ifTable: имя/MTU/скорость/
+статусы), `snmp_walk` (произвольный OID, GETBULK), `printer_info`
+(Printer-MIB: serial, prtMarkerLifeCount — распечатанные страницы,
+уровень тонера %, hrPrinterStatus, битмаска ошибок — замятие/нет бумаги/
+крышка/офлайн; `device='all'` — все принтеры инвентаря). Счётчик сканов
+вендорозависим (стандартный Printer-MIB его не даёт) — инструмент честно
+отдаёт `pages_scanned: null` с пояснением.
+
+Ручная часть (нужен живой SNMP-агент, мок-режим выключен):
+
+| № | Что проверить | Как | Ожидание |
+|---|---------------|-----|----------|
+| 1 | Форма инвентаря с SNMP-полями | Админка → Инвентарь → «Добавить», тип printer | Поля «SNMP version» и «SNMP community» в форме |
+| 2 | snmp_info на реальном устройстве | Чат: «Покажи описание и uptime core-sw» | sysDescr устройства, uptime «X д Y ч Z мин» |
+| 3 | snmp_interfaces | Чат: «Какие интерфейсы у core-sw?» | Таблица ifTable со статусами up/down |
+| 4 | printer_info на живом принтере | Чат: «Сколько страниц напечатано на hq-printer-1? Тонер?» | pages_printed, toner_level_percent, status |
+| 5 | printer_info all | Чат: «Состояние всех принтеров» | Ответ по каждому принтеру группы |
+| 6 | Недоступный принтер в all | Выключить принтер, спросить «по всем принтерам» | Ошибка только в его item, остальные живые |

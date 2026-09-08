@@ -20,7 +20,8 @@ import os
 # Импорт app только после возможного переопределения NETOPS_DATABASE_URL
 # (SessionLocal/engine создаются на импорте db.py).
 from app.db import Base, SessionLocal, engine
-from app.main import _ensure_audit_columns, _ensure_message_columns, bootstrap_admin
+from app.main import (_ensure_audit_columns, _ensure_device_columns,
+                      _ensure_message_columns, bootstrap_admin)
 from app.models import (AuditLog, Conversation, Device, DeviceType,
                         Message, Role, User)
 
@@ -49,6 +50,14 @@ def seed_users(db) -> dict[str, User]:
 
 def seed_devices(db) -> None:
     """Несколько устройств разных типов/групп (idempotent upsert)."""
+    # Этап SNMP: принтер — с явными SNMP-полями (v2c/community)
+    if not db.query(Device).filter(Device.name == "hq-printer-1").first():
+        db.add(Device(name="hq-printer-1", type=DeviceType.printer,
+                      host="10.10.60.7", group="Принтеры",
+                      description="Принтер в офисе (SNMP)",
+                      source="manual", enabled=True,
+                      snmp_version="2c", snmp_community="public"))
+        log.info("Создано устройство hq-printer-1 (printer)")
     for name, dtype, host, group, descr in (
             ("core-rtr1", DeviceType.eltex, "10.10.10.1", "Сеть",
              "Ядро сети, стенд"),
@@ -161,6 +170,7 @@ def main() -> None:
     Base.metadata.create_all(engine)
     _ensure_message_columns()
     _ensure_audit_columns()
+    _ensure_device_columns()
     bootstrap_admin()
     with SessionLocal() as db:
         users = seed_users(db)

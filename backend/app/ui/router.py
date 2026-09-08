@@ -909,6 +909,9 @@ def _inv_upsert(db: Session, data: dict, existing: Device | None) -> Device:
     d.description = (data.get("description") or "").strip()
     if existing is None or existing.source == "manual":
         d.group = (data.get("group") or "").strip()
+    # SNMP-поля (этап SNMP): пустые значения = дефолты; версия пока одна (2c)
+    d.snmp_version = (data.get("snmp_version") or "").strip() or "2c"
+    d.snmp_community = (data.get("snmp_community") or "").strip() or "public"
     if existing is None:
         db.add(d)
     db.commit()

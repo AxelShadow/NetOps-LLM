@@ -542,6 +542,65 @@ auth_request, всё в docker-compose. Backend — единственный и�
   роутер-до-mount, raw-ASGI traversal, envsubst-рендер nginx,
   compose-валидация, изоляция БД — netops.db не тронута).
 
+### Этап 18 — SNMP: адаптер v2c + скилл принтеров (готово, 2026-09-08)
+- **devices/snmp.py** (новый): pysnmp 7.1.x — полностью asyncio-API
+  (`hlapi.v1arch.asyncio`), синхронных getCmd/walkCmd больше нет.
+  Обёртки `snmp_get`/`snmp_walk` через `asyncio.run()` на вызов
+  (в backend нет гарантии event-loop в потоке вызывающего); SnmpDispatcher
+  на каждый вызов (создание ~0.02 мс, потокобезопасно). SNMP-типы 7.x —
+  не int-подклассы: явная конвертация `int(...)`. Только GET/GETBULK —
+  read-only. Таймаут обязателен (UdpTransportTarget.create, retries=1).
+  Грабли: prettyPrint бинарного OctetString = hex ('0x1800'), пустого =
+  '' — критично для битмаски ошибок принтера; WALK с
+  lexicographicMode=False — авто-остановка на выходе из поддерева.
+- **models.py / main.py**: DeviceType.printer; Device.snmp_version
+  (default "2c") / snmp_community (default "public"). Авто-миграция без
+  alembic при старте: `_ensure_device_columns` (inspect → ALTER TABLE
+  ADD COLUMN, sqlite и postgres, идемпотентно) + `_ensure_printer_enum_value`
+  (postgres ENUM: ALTER TYPE ADD VALUE IF NOT EXISTS в AUTOCOMMIT-
+  соединении — в транзакции нельзя). Прод-БД без ручных действий.
+- **Админка**: SNMP-секция в форме инвентаря (select snmp_version +
+  input snmp_community, дефолты при пустых); тип printer в select
+  (автоматически из _INV_DEVICE_TYPES). seed_dev.py: hq-printer-1.
+- **Инструменты агента** (tools.py, после zabbix-блока): snmp_info
+  (sysDescr/sysName/sysContact/sysLocation + uptime «X д Y ч Z мин»,
+  TTL 120), snmp_interfaces (ifTable по ifIndex: имя/MTU/скорость/
+  admin+oper status, TTL 120), snmp_walk (произвольный OID, TTL 0 —
+  скилл для отладки/вендорских OID), printer_info (TTL 120 — скилл
+  принтеров: serial, счётчик распечатанных страниц prtMarkerLifeCount,
+  тонер % (уровень/maxCapacity, -3=неизвестно -> null), статус
+  hrPrinterStatus, ошибки hrPrinterDetectedErrorState; device='all' —
+  все принтеры, недоступный не валит агрегат: его item = {error}).
+  Community/port из Device; тип-гвард _snmp_target — только
+  printer/eltex/mikrotik/usergate.
+- **Битмаска ошибок (RFC 2790, грабли верификатора)**: BITS
+  нумеруются MSB-first — «бит 0 = старший бит первого байта»;
+  декод по байтам `byte & (0x80 >> i)`, полная 15-битная карта
+  (lowPaper..overduePreventMaint). Первая версия декодила LSB-first
+  по урезанному списку — каждый бит интерпретировался неверно
+  (замятие показывалось бы «нет бумаги»); поймал верификатор,
+  фикс + независимые прогоны декодера.
+- **Честность по сканам**: счётчик отсканированных страниц вендорозависим
+  (стандартный Printer-MIB его не даёт; нужен enterprise-MIB HP/Kyocera
+  и т.п.) — printer_info отдаёт pages_scanned=null с пояснением, пункт 14
+  SYSTEM_PROMPT прямо запрещает выдумывать значение.
+- **SYSTEM_PROMPT**: пункт 14 — SNMP-инструменты, скилл принтеров,
+  honest-note про сканы.
+- **Тесты**: test_snmp_migration.py (16: свежая БД/дефолты raw-INSERT,
+  идемпотентность, «старая» БД с ALTER, CRUD printer, printer в select),
+  test_snmp_tools.py (22: реестр+TTL, моки single/all, реальная логика
+  printer_info на подменённом walk — тонер 25%, битмаска 0x1800 ->
+  noToner+doorOpen, 5 прямых проверок декодера BITS, RBAC viewer,
+  маркер mock-ошибка, тип-гвард vcenter, инвентарь). test_mock_mode.py:
+  EXPECTED_MOCK_TOOLS 15 -> 19. Runner: 20 наборов.
+- **Моки**: 4 (snmp_info/snmp_interfaces/snmp_walk/printer_info) в
+  MOCK_TOOLS — формы JSON идентичны реальным инструментам.
+- **Прогоны**: верификация — первый прогон FAIL (битмаска, см. выше),
+  после фикса — повторная верификация PASS; runner 20/20, SNMP-наборы
+  22/22 и 16/16, netops.db не тронута (md5 до/после).
+- **requirements.txt**: pysnmp>=7.1. **docs/dev-checklist.md**: секция
+  «Этап SNMP» (авто-прогон + ручная таблица живого SNMP-агента).
+
 1. **Zabbix 6.2**: токен работает только параметром `auth` в теле JSON-RPC
    (заголовок Authorization: Bearer — не сработал); URL — http, не https;
    sortfield "clock" у problem.get запрещён; selectHosts у problem.get молча
@@ -605,6 +664,14 @@ auth_request, всё в docker-compose. Backend — единственный и�
 | `zabbix_items` | 120s | Последние значения метрик устройства |
 | `zabbix_history` | 60s | История метрики (до 7 дней) |
 
+### SNMP (v2c, read-only; принтеры + сетевые eltex/mikrotik/usergate)
+| Инструмент | TTL | Описание |
+|---|---|---|
+| `snmp_info` | 120s | sysDescr/sysName/sysContact/sysLocation/uptime |
+| `snmp_interfaces` | 120s | ifTable: имя/MTU/скорость/статусы |
+| `snmp_walk` | 0 | Произвольный OID (GETBULK-обход) |
+| `printer_info` | 120s | Скилл принтеров: serial, распечатанные страницы, тонер %, статус, ошибки; device="all" |
+
 ### Композитные (is_composite=True)
 | Инструмент | TTL | Описание |
 |---|---|---|
@@ -624,6 +691,9 @@ auth_request, всё в docker-compose. Backend — единственный и�
 - Анализ порогов: датасторы <15% = критично; CPU/RAM >85% = риск; снапшоты = долг.
 - Zabbix: ОДИН bulk-вызов, не опрашивать устройства поштучно.
 - vCenter: проверять хосты/датасторы/события; сенсоры — только для standalone ESXi.
+- **Принтеры и сетевые → SNMP-инструменты** (snmp_info/snmp_interfaces/
+  snmp_walk/printer_info). Счётчик сканов вендорозависим — честно
+  сообщать, не выдумывать; распечатанные страницы = pages_printed.
 
 build_system_prompt добавляет: текущее время + список включённых устройств.
 
@@ -659,14 +729,17 @@ build_system_prompt добавляет: текущее время + список
   (frontend/legacy/index.html) удаляется только после
   live-подтверждения на сервере. Live-проверка nginx/WebSocket и
   docker-стека отложена на сервер.
+- Этап 18 (SNMP + скилл принтеров) — готово, см. §5 и §7; runner 20/20.
 
-### Ближайший шаг: прямой SNMP для ручных устройств
-- Форма: версия SNMP (v2c community / v3), поля в Device (snmp_version и т.п.).
-- Библиотека pysnmp (чистый Python, работает на Windows).
-- Инструменты: snmp_info (sysDescr/uptime), snmp_interfaces (разбор ifTable),
-  snmp_walk (сырой обход OID). Только GET/WALK — read-only по природе.
-- В компании используется SNMPv2c.
-- Регистрация через @register_tool: декоратор + cache_ttl=120.
+### Ближайший шаг (сделано — Этап 18, SNMP): краткий итог
+- Прямой SNMP для ручных устройств реализован (v2c, pysnmp): snmp_info /
+  snmp_interfaces / snmp_walk / printer_info (скилл принтеров, счётчик
+  распечатанных страниц, тонер, статус/ошибки; device="all").
+- Community хранится в инвентаре (snmp_version/snmp_community, авто-миграция
+  при старте). Счётчик сканов вендорозависим — отдаётся null с пояснением.
+- Возможное развитие: SNMPv3 (authPriv), enterprise-MIB моделей принтеров
+  для счётчика сканов (HP/Kyocera), edgecore/snr/aruba в DeviceType при
+  SSH-этапе (ENUM уже расширяется по образцу printer).
 
 ### Затем
 - SSH CLI (netmiko) для Eltex/EdgeCore/SNR/Aruba с белым списком read-only команд

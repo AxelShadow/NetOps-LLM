@@ -15,6 +15,7 @@ from ..devices.zabbix import ZabbixClient
 from ..db import SessionLocal
 from ..models import Device, DeviceType, AuditLog
 from ..devices.vmware import get_adapter, drop_adapter
+from ..devices.snmp import snmp_get as _snmp_get, snmp_walk as _snmp_walk
 from ..config import get_settings
 
 settings = get_settings()
@@ -519,6 +520,277 @@ def zabbix_history(device: str, item: str, hours: int = 24):
     rows = ZabbixClient().get_history(
         item_data["itemid"], int(item_data["value_type"]), h)
     return json.dumps(_format_history(rows, item_data.get("units") or ""), ensure_ascii=False, default=str), "ok"
+
+
+# --- SNMP Tools (Этап SNMP: сетевые устройства и принтеры, v2c) ---
+
+def _snmp_call(device: Device) -> dict:
+    """Device -> kwargs для SNMP-адаптера (community из инвентаря).
+
+    port берём только у принтеров (модельный port для сетевых устройств —
+    это SSH-порт, SNMP-агент живёт на 161); 0/пусто -> стандартный 161.
+    """
+    snmp_port = device.port if device.type == DeviceType.printer else 0
+    return {
+        "community": device.snmp_community or "public",
+        "port": snmp_port or 161,
+    }
+
+
+def _snmp_target(name: str) -> Device:
+    """SNMP-устройство из инвентаря: printer или сетевое (eltex/mikrotik/usergate)."""
+    d = _get_device(name)
+    if d.type not in (DeviceType.printer, DeviceType.eltex,
+                      DeviceType.mikrotik, DeviceType.usergate):
+        raise Exception(
+            f"'{d.name}' (тип {d.type.value}) не поддерживает SNMP-опрос: "
+            f"подходят принтеры и сетевые устройства (eltex/mikrotik/usergate)")
+    return d
+
+
+def _format_uptime(ticks: int | None) -> str:
+    """TimeTicks (сотые доли секунды) -> 'X д Y ч Z мин'."""
+    if ticks is None:
+        return ""
+    minutes, _ = divmod(int(ticks) // 100, 60)
+    days, hours = divmod(minutes // 60, 24)
+    return f"{days} д {hours} ч {minutes % 60} мин"
+
+
+# Printer-MIB / Host-MIB статусы, перевод в текст.
+_PRINTER_STATUS = {1: "other", 2: "unknown", 3: "idle",
+                   4: "printing", 5: "warmup"}
+# hrPrinterDetectedErrorState (RFC 2790): полная 15-битная карта, номер
+# элемента = номер бита (lowPaper=0 ... overduePreventMaint=14).
+_PRINTER_ERRORS = ["lowPaper", "noPaper", "lowToner", "noToner",
+                   "doorOpen", "jammed", "offline", "serviceRequested",
+                   "inputTrayMissing", "outputTrayMissing",
+                   "markerSupplyMissing", "outputNearFull", "outputFull",
+                   "inputTrayEmpty", "overduePreventMaint"]
+_IF_STATUS = {1: "up", 2: "down", 3: "testing", 4: "unknown", 5: "dormant",
+              6: "notPresent", 7: "lowerLayerDown"}
+_IF_ADMIN_STATUS = {1: "up", 2: "down", 3: "testing"}
+
+
+def _decode_printer_errors(value) -> list:
+    """hrPrinterDetectedErrorState (RFC 2790, BITS) -> список имён ошибок.
+
+    pysnmp отдаёт бинарную OctetString как hex prettyPrint ('0x0600').
+    По RFC 2790 биты нумеруются MSB-first: «bit 0 — старший бит первого
+    байта», bit 7 — младший бит первого байта, bit 8 — старший второго.
+    Поэтому декодим по байтам: бит i байта b выставлен, если
+    b & (0x80 >> i); глобальный номер = индекс_байта * 8 + i.
+    """
+    raw = str(value or "").strip()
+    if raw.lower().startswith("0x"):
+        raw = raw[2:]
+    if not raw:
+        return []
+    try:
+        data = bytes.fromhex(raw)
+    except ValueError:
+        return []
+    errors = []
+    for byte_index, byte in enumerate(data):
+        for bit_in_byte in range(8):
+            if byte & (0x80 >> bit_in_byte):
+                bit_number = byte_index * 8 + bit_in_byte
+                if bit_number < len(_PRINTER_ERRORS):
+                    errors.append(_PRINTER_ERRORS[bit_number])
+    return errors
+
+
+@register_tool(
+    name="snmp_info",
+    description="Базовые сведения об устройстве по SNMP (v2c): описание системы (sysDescr), имя, контакт, расположение, время работы (sysUpTime)",
+    parameters={"type": "object",
+                "properties": {"device": {"type": "string",
+                                          "description": "Имя устройства из инвентаря (принтер или сетевое)"}},
+                "required": ["device"]},
+    cache_ttl=120
+)
+def snmp_info(device: str):
+    d = _snmp_target(device)
+    oids = {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysContact": "1.3.6.1.2.1.1.4.0",
+        "sysName": "1.3.6.1.2.1.1.5.0",
+        "sysLocation": "1.3.6.1.2.1.1.6.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+    }
+    resp = _snmp_get(d.host, list(oids.values()), **_snmp_call(d))
+    out = {"device": d.name, "host": d.host}
+    for label, oid in oids.items():
+        out[label] = resp.get(oid)
+    out["uptime"] = _format_uptime(out.pop("sysUpTime"))
+    return json.dumps(out, ensure_ascii=False, default=str), "ok"
+
+
+@register_tool(
+    name="snmp_interfaces",
+    description="Сетевые интерфейсы устройства по SNMP: имя, MTU, скорость, административный и рабочий статус (ifTable)",
+    parameters={"type": "object",
+                "properties": {"device": {"type": "string",
+                                          "description": "Имя устройства из инвентаря (принтер или сетевое)"}},
+                "required": ["device"]},
+    cache_ttl=120
+)
+def snmp_interfaces(device: str):
+    d = _snmp_target(device)
+    call = _snmp_call(d)
+    base = "1.3.6.1.2.1.2.2.1"
+    rows_idx = _snmp_walk(d.host, f"{base}.1", **call)     # ifIndex
+    if not rows_idx:
+        return json.dumps({"device": d.name, "interfaces": []},
+                          ensure_ascii=False), "ok"
+    rows_desc = _snmp_walk(d.host, f"{base}.2", **call)    # ifDescr
+    rows_mtu = _snmp_walk(d.host, f"{base}.4", **call)     # ifMtu
+    rows_speed = _snmp_walk(d.host, f"{base}.5", **call)    # ifSpeed
+    rows_admin = _snmp_walk(d.host, f"{base}.7", **call)   # ifAdminStatus
+    rows_oper = _snmp_walk(d.host, f"{base}.8", **call)    # ifOperStatus
+
+    def _by_index(rows: list) -> dict:
+        return {full_oid.rsplit(".", 1)[-1]: val
+                for full_oid, val in rows}
+
+    desc = _by_index(rows_desc)
+    mtu = _by_index(rows_mtu)
+    speed = _by_index(rows_speed)
+    admin = _by_index(rows_admin)
+    oper = _by_index(rows_oper)
+
+    out = []
+    for full_oid, idx in rows_idx:
+        if isinstance(idx, str) or idx is None:
+            continue    # битая строка — пропускаем
+        iface = {
+            "index": idx,
+            "name": desc.get(str(idx)),
+            "mtu": mtu.get(str(idx)),
+            "speed_bps": speed.get(str(idx)),
+            "admin_status": _IF_ADMIN_STATUS.get(admin.get(str(idx)), admin.get(str(idx))),
+            "oper_status": _IF_STATUS.get(oper.get(str(idx)), oper.get(str(idx))),
+        }
+        out.append(iface)
+    return json.dumps({"device": d.name, "interfaces": out},
+                      ensure_ascii=False, default=str), "ok"
+
+
+@register_tool(
+    name="snmp_walk",
+    description="Обход SNMP-поддерева OID (GETBULK): возвращает список [OID, значение]. Универсальный низкоуровневый доступ, если готовых инструментов недостаточно",
+    parameters={"type": "object",
+                "properties": {
+                    "device": {"type": "string",
+                               "description": "Имя устройства из инвентаря"},
+                    "oid": {"type": "string",
+                            "description": "Числовой OID-корень, напр. 1.3.6.1.2.1.1"},
+                },
+                "required": ["device", "oid"]},
+    cache_ttl=0
+)
+def snmp_walk_tool(device: str, oid: str):
+    d = _snmp_target(device)
+    rows = _snmp_walk(d.host, oid, **_snmp_call(d))
+    return json.dumps({"device": d.name, "rows": rows},
+                      ensure_ascii=False, default=str), "ok"
+
+
+@register_tool(
+    name="printer_info",
+    description="Сведения о принтере по SNMP: серийный номер, счётчик распечатанных страниц, уровень тонера, статус печати и ошибки (замятие, нет бумаги, крышка открыта). device='all' — все принтеры инвентаря",
+    parameters={"type": "object",
+                "properties": {
+                    "device": {"type": "string",
+                               "description": "Имя принтера из инвентаря или 'all' — все принтеры"},
+                },
+                "required": ["device"]},
+    cache_ttl=120
+)
+def printer_info(device: str):
+    if device.strip().lower() in ("all", "все", "*"):
+        with SessionLocal() as db:
+            printers = db.query(Device).filter(
+                Device.enabled.is_(True),
+                Device.type == DeviceType.printer).all()
+        if not printers:
+            raise Exception("В инвентаре нет принтеров")
+        aggregated = {}
+        for p in printers:
+            try:
+                data = json.loads(printer_info(p.name)[0])
+                aggregated[p.name] = data
+            except Exception as e:
+                aggregated[p.name] = {"error": str(e)}
+        return json.dumps(aggregated, ensure_ascii=False, default=str), "ok"
+    d = _snmp_target(device)
+    call = _snmp_call(d)
+
+    def _walk_to_dict(oid: str) -> dict:
+        """walk таблицы -> {последний subid: value}."""
+        return {full.rsplit(".", 1)[-1]: val
+                for full, val in _snmp_walk(d.host, oid, **call)}
+
+    # Printer-MIB: serial/status/errors нумеруются по hrDeviceIndex,
+    # счётчик страниц и тонер — по СВОИМ prtMarkerIndex/prtMarkerSuppliesIndex.
+    # Это разные пространства нумерации (обычно оба = 1, но не гарантия),
+    # поэтому не сшиваем их по ключу: units и markers — отдельные блоки.
+    serials = _walk_to_dict("1.3.6.1.2.1.43.5.1.1.17")       # prtGeneralSerialNumber
+    status = _walk_to_dict("1.3.6.1.2.1.25.3.5.1.1")        # hrPrinterStatus
+    errors_raw = _walk_to_dict("1.3.6.1.2.1.25.3.5.1.2")    # hrPrinterDetectedErrorState
+    pages = _walk_to_dict("1.3.6.1.2.1.43.10.2.1.4")        # prtMarkerLifeCount (счётчик страниц)
+    toner_max = _walk_to_dict("1.3.6.1.2.1.43.11.1.1.8")    # prtMarkerSuppliesMaxCapacity
+    toner_level = _walk_to_dict("1.3.6.1.2.1.43.11.1.1.9")  # prtMarkerSuppliesLevel
+
+    units = []
+    for sub, serial in serials.items():
+        errors = _decode_printer_errors(errors_raw.get(sub))
+        units.append({
+            "unit": int(sub) if sub.isdigit() else sub,
+            "serial": serial,
+            "pages_printed": pages.get(sub),
+            "toner_level_percent": None,     # заполняется из markers ниже
+            "status": _PRINTER_STATUS.get(status.get(sub), status.get(sub)),
+            "errors": errors,
+        })
+
+    # Тонер: у маркера может быть несколько supplies (CMYK-тонеры). Уровень
+    # каждого supply'а как % от maxCapacity; уровень -3 («неизвестно») и
+    # max<=0 -> None. Первый unit получает общий тонер (у большинства
+    # офисных принтеров маркер и unit одни).
+    markers = []
+    supply_level_pct = []
+    for sub, level in toner_level.items():
+        max_level = toner_max.get(sub)
+        pct = None
+        if isinstance(level, int) and isinstance(max_level, int) and max_level > 0 \
+                and level >= 0:
+            pct = round(level / max_level * 100, 1)
+        markers.append({
+            "supply": int(sub) if sub.isdigit() else sub,
+            "level": level,
+            "max_capacity": max_level,
+            "percent": pct,
+        })
+        if pct is not None:
+            supply_level_pct.append(pct)
+
+    if units and supply_level_pct:
+        units[0]["toner_level_percent"] = (
+            round(sum(supply_level_pct) / len(supply_level_pct), 1))
+
+    return json.dumps({
+        "device": d.name,
+        "host": d.host,
+        "units": units,
+        "toner_supplies": markers,
+        "pages_scanned": None,
+        "note_scanned": ("Счётчик сканированных страниц вендорозависим — "
+                         "стандартный Printer-MIB его не даёт; нужен "
+                         "enterprise-MIB модели (HP/Kyocera и т.п.). "
+                         "Распечатанные страницы — поле pages_printed "
+                         "из prtMarkerLifeCount."),
+    }, ensure_ascii=False, default=str), "ok"
 
 
 # --- Composite Tools ---

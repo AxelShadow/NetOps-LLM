@@ -31,13 +31,14 @@ from app.models import AuditLog, User, Role  # noqa: E402
 # Схема БД для теста (без полного lifespan приложения)
 Base.metadata.create_all(engine)
 
-ROLE = "admin"  # роли по умолчанию разрешают все 15 инструментов
+ROLE = "admin"  # роли по умолчанию разрешают все 19 инструментов
 
 EXPECTED_MOCK_TOOLS = {
     "ping", "vmware_vms", "vmware_hosts", "vmware_snapshots",
     "vmware_datastores", "vmware_vm_disks", "vmware_host_networks",
     "vmware_vm_networks", "vmware_events", "vmware_host_sensors",
     "zabbix_problems", "zabbix_items", "zabbix_history",
+    "snmp_info", "snmp_interfaces", "snmp_walk", "printer_info",
     "get_device_full_health", "get_infrastructure_health",
 }
 
@@ -94,10 +95,10 @@ def test_vmware_vms_returns_mock_array(db_and_user):
     assert data[0]["name"] == "srv-app-01"
 
 
-def test_all_15_tools_registered():
+def test_all_19_tools_registered():
     from app.agent.mock import MOCK_TOOLS
     assert set(MOCK_TOOLS.keys()) == EXPECTED_MOCK_TOOLS
-    # Все 15 моков соответствуют реально зарегистрированным инструментам
+    # Все 19 моков соответствуют реально зарегистрированным инструментам
     assert EXPECTED_MOCK_TOOLS.issubset({t["function"]["name"]
                                         for t in TOOLS_SCHEMA})
 

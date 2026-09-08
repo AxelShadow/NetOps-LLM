@@ -81,11 +81,68 @@ def _ensure_audit_columns():
                 log.info("Добавлена колонка audit_log.%s", col)
 
 
+# Колонки devices, добавленные на этапе SNMP (эти же DDL валидны для sqlite и
+# postgres: DEFAULT применяется и к существующим строкам, и к новым вставкам).
+_DEVICE_MIGRATIONS = [
+    ("snmp_version", "VARCHAR(4) DEFAULT '2c'"),
+    ("snmp_community", "VARCHAR(64) DEFAULT 'public'"),
+]
+
+
+def _ensure_device_columns(eng=None):
+    """Добавляет SNMP-колонки в существующую таблицу devices (прод без alembic).
+
+    eng передаётся только из теста (проверка «старой» БД на отдельном
+    движке); при старте приложения/сида используется глобальный engine.
+    """
+    from sqlalchemy import inspect, text
+    eng = eng or engine
+    insp = inspect(eng)
+    if "devices" not in insp.get_table_names():
+        return
+    existing = {c["name"] for c in insp.get_columns("devices")}
+    with eng.begin() as conn:
+        for col, col_type in _DEVICE_MIGRATIONS:
+            if col not in existing:
+                conn.execute(text(
+                    f"ALTER TABLE devices ADD COLUMN {col} {col_type}"))
+                log.info("Добавлена колонка devices.%s", col)
+
+
+def _ensure_printer_enum_value(eng=None):
+    """Расширяет postgres-ENUM devicetype значением 'printer' (этап SNMP).
+
+    На postgres колонка devices.type — нативный тип devicetype: новое
+    значение Python-enum без ALTER TYPE делает INSERT printer
+    невозможным. На sqlite тип — VARCHAR (значение проходит всегда),
+    здесь тихо пропускаем. eng — только для тестов, как выше.
+    """
+    from sqlalchemy import text
+    eng = eng or engine
+    if eng.dialect.name != "postgresql":
+        return
+    try:
+        # ALTER TYPE ADD VALUE не управляется транзакцией (до PG 12),
+        # поэтому отдельное соединение с автокоммитом, а не begin()
+        with eng.connect().execution_options(
+                isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text(
+                "ALTER TYPE devicetype ADD VALUE IF NOT EXISTS 'printer'"))
+        log.info("ENUM devicetype расширен значением 'printer'")
+    except Exception as e:
+        # IF NOT EXISTS покрывает «значение уже есть» на PG 9.5+;
+        # на старых версиях это DuplicateObject — тоже норма
+        log.warning("Не удалось расширить ENUM devicetype (возможно, "
+                    "значение уже есть): %s", e)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(engine)
     _ensure_message_columns()
     _ensure_audit_columns()
+    _ensure_device_columns()
+    _ensure_printer_enum_value()
     bootstrap_admin()
     yield
 

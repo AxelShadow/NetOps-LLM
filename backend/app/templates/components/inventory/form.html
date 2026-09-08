@@ -75,6 +75,25 @@
                            class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
                 </div>
             </div>
+            {# SNMP-подключение (этап SNMP): показывается всегда — применимо
+               и к сетевому оборудованию, и к принтерам; v3 пока не поддерживается #}
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1" for="d-snmp-version">SNMP: версия</label>
+                    <select id="d-snmp-version" name="snmp_version"
+                            {% if device and device.source == "zabbix" %}disabled{% endif %}
+                            class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                        <option value="2c" {% if not device or device.snmp_version == "2c" %}selected{% endif %}>2c</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1" for="d-snmp-community">SNMP: community</label>
+                    <input id="d-snmp-community" name="snmp_community" type="text"
+                           value="{{ device.snmp_community if device else '' }}" placeholder="public"
+                           {% if device and device.source == "zabbix" %}disabled{% endif %}
+                           class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                </div>
+            </div>
             <div class="grid grid-cols-2 gap-3">
                 <div>
                     <label class="block text-xs font-medium text-slate-500 mb-1" for="d-group">Группа</label>

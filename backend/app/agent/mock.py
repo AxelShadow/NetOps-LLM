@@ -226,6 +226,102 @@ def mock_zabbix_history(args: dict) -> tuple[str, str]:
 
 
 # ------------------------------------------------------------
+# SNMP (Этап SNMP: snmp_info / snmp_interfaces / snmp_walk / printer_info)
+# ------------------------------------------------------------
+
+def mock_snmp_info(args: dict) -> tuple[str, str]:
+    _check_error(args)
+    return _json({
+        "device": args.get("device") or "mock-sw",
+        "host": "192.0.2.10",
+        "sysDescr": "Mock SNMP device (Eltex OS 4.2.1)",
+        "sysContact": "IT-отдел",
+        "sysName": "mock-sw",
+        "sysLocation": "Серверная, стойка 3",
+        "uptime": "3 д 4 ч 5 мин",
+    })
+
+
+def mock_snmp_interfaces(args: dict) -> tuple[str, str]:
+    _check_error(args)
+    return _json({
+        "device": args.get("device") or "mock-sw",
+        "interfaces": [
+            {"index": 1, "name": "eth0", "mtu": 1500, "speed_bps": 1000000000,
+             "admin_status": "up", "oper_status": "up"},
+            {"index": 2, "name": "lo", "mtu": 65536, "speed_bps": 0,
+             "admin_status": "up", "oper_status": "up"},
+        ],
+    })
+
+
+def mock_snmp_walk(args: dict) -> tuple[str, str]:
+    _check_error(args)
+    rows = [
+        ["1.3.6.1.2.1.1.1.0", "Mock SNMP device"],
+        ["1.3.6.1.2.1.1.3.0", 123456],
+        ["1.3.6.1.2.1.1.5.0", "mock-sw"],
+    ]
+    return _json({"device": args.get("device") or "mock-sw", "rows": rows})
+
+
+def mock_printer_info(args: dict) -> tuple[str, str]:
+    _check_error(args)
+    device = (args.get("device") or "").strip().lower()
+    if device in ("all", "все", "*"):
+        return _json({
+            "hq-printer-1": {
+                "device": "hq-printer-1", "host": "192.0.2.150",
+                "units": [{"unit": 1, "serial": "MOCK12345",
+                           "pages_printed": 12345,
+                           "toner_level_percent": 42.0,
+                           "status": "printing", "errors": []}],
+                "toner_supplies": [{"supply": 1, "level": 4200,
+                                    "max_capacity": 10000,
+                                    "percent": 42.0}],
+                "pages_scanned": None,
+                "note_scanned": "Счётчик сканированных страниц вендорозависим — "
+                                "стандартный Printer-MIB его не даёт; нужен "
+                                "enterprise-MIB модели (HP/Kyocera и т.п.). "
+                                "Распечатанные страницы — поле pages_printed "
+                                "из prtMarkerLifeCount.",
+            },
+            "branch-printer-2": {
+                "device": "branch-printer-2", "host": "192.0.2.151",
+                "units": [{"unit": 1, "serial": "MOCK67890",
+                           "pages_printed": 67890,
+                           "toner_level_percent": 8.0,
+                           "status": "idle", "errors": ["lowPaper"]}],
+                "toner_supplies": [{"supply": 1, "level": 800,
+                                    "max_capacity": 10000,
+                                    "percent": 8.0}],
+                "pages_scanned": None,
+                "note_scanned": "Счётчик сканированных страниц вендорозависим — "
+                                "стандартный Printer-MIB его не даёт; нужен "
+                                "enterprise-MIB модели (HP/Kyocera и т.п.). "
+                                "Распечатанные страницы — поле pages_printed "
+                                "из prtMarkerLifeCount.",
+            },
+        })
+    return _json({
+        "device": args.get("device") or "hq-printer-1",
+        "host": "192.0.2.150",
+        "units": [{"unit": 1, "serial": "MOCK12345",
+                   "pages_printed": 12345,
+                   "toner_level_percent": 42.0,
+                   "status": "printing", "errors": []}],
+        "toner_supplies": [{"supply": 1, "level": 4200, "max_capacity": 10000,
+                            "percent": 42.0}],
+        "pages_scanned": None,
+        "note_scanned": "Счётчик сканированных страниц вендорозависим — "
+                        "стандартный Printer-MIB его не даёт; нужен "
+                        "enterprise-MIB модели (HP/Kyocera и т.п.). "
+                        "Распечатанные страницы — поле pages_printed "
+                        "из prtMarkerLifeCount.",
+    })
+
+
+# ------------------------------------------------------------
 # Композитные
 # ------------------------------------------------------------
 
@@ -304,6 +400,10 @@ MOCK_TOOLS = {
     "zabbix_problems": mock_zabbix_problems,
     "zabbix_items": mock_zabbix_items,
     "zabbix_history": mock_zabbix_history,
+    "snmp_info": mock_snmp_info,
+    "snmp_interfaces": mock_snmp_interfaces,
+    "snmp_walk": mock_snmp_walk,
+    "printer_info": mock_printer_info,
     "get_device_full_health": mock_get_device_full_health,
     "get_infrastructure_health": mock_get_infrastructure_health,
 }

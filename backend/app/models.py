@@ -65,6 +65,7 @@ class DeviceType(str, enum.Enum):
     eltex = "eltex"
     mikrotik = "mikrotik"
     usergate = "usergate"
+    printer = "printer"       # этап SNMP: сетевые принтеры (только SNMP)
     vcenter = "vcenter"
     esxi = "esxi"
     other = "other"
@@ -87,6 +88,13 @@ class Device(Base):
     zabbix_hostid: Mapped[str | None] = mapped_column(
         String(32), unique=True, default=None)
     group: Mapped[str] = mapped_column("group_name", String(128), default="")
+    # SNMP-подключение (этап SNMP): v2c по умолчанию, community только для SNMP
+    # server_default дублирует DEFAULT в _DEVICE_MIGRATIONS: чистая и
+    # мигрированная БД ведут себя одинаково при raw-INSERT без SNMP-полей
+    snmp_version: Mapped[str] = mapped_column(
+        String(4), default="2c", server_default="2c")
+    snmp_community: Mapped[str] = mapped_column(
+        String(64), default="public", server_default="public")
 
 
 class AuditLog(Base):
