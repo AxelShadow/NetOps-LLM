@@ -626,8 +626,9 @@ auth_request, всё в docker-compose. Backend — единственный и�
   упоминает в инвентаре.
 - **Discovery** (devices/printer_discovery.py + api/devices.py
   sync_printer_discovery + ui/router.py POST /inventory/discover-printers):
-  форма в инвентаре (подсети до 4 × /24, суммарно ≤1024 адресов, community
-  default public, порт, таймаут; клампы). Критерий принтера: непустой
+  форма в инвентаре (ОДНА подсеть, маска до /22 — ≤1024 адресов,
+  community default public, порт, таймаут; клампы). Критерий принтера:
+  непустой
   walk серийной таблицы 43.5.1.1.17 (авторитетно — свитчи её не
   реализуют), фолбэк — keywords printer-моделей в sysDescr. Найденные
   добавляются ВЫКЛЮЧЕННЫМИ: type=printer, группа «Принтеры»,

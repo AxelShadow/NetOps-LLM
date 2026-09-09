@@ -18,9 +18,9 @@ _PRINTER_KEYWORDS = re.compile(
     r"bizhub|aficio|imagerunner|workcentre|workcenter|phaser|docuprint|"
     r"magicolor", re.IGNORECASE)
 
-MAX_SUBNETS = 4        # подсетей за один запуск формы
-MIN_PREFIX = 24        # /24 и крупнее (т.е. меньше адресов) — /23 слишком долго
-MAX_TOTAL_HOSTS = 1024  # суммарный лимит адресов
+MAX_SUBNETS = 1        # одна подсеть за запуск формы
+MIN_PREFIX = 22        # маска до /22 (1024 адреса) включительно
+MAX_TOTAL_HOSTS = 1024  # суммарный лимит адресов (/22 = ровно 1024)
 MAX_WORKERS = 32       # потоков параллельного опроса
 
 _SYS_OIDS = ["1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.5.0"]  # sysDescr, sysName
@@ -28,14 +28,14 @@ _SERIAL_OID = "1.3.6.1.2.1.43.5.1.1.17"                  # prtGeneralSerialNumbe
 
 
 def parse_subnets(text: str) -> list:
-    """'10.0.10.0/24, 10.0.20.0/24' -> [IPv4Network].
+    """'10.0.10.0/24' -> [IPv4Network]. ОДНА подсеть с маской до /22.
 
     ValueError с текстом для flash: пусто/невалидно/IPv6/маска крупнее
-    /24/больше MAX_SUBNETS сетей/суммарно > MAX_TOTAL_HOSTS хостов.
+    /22/больше одной подсети/суммарно > MAX_TOTAL_HOSTS хостов.
     ip_network(s, strict=False): '10.0.10.5/24' нормализуется в /24.
     """
     if not text or not text.strip():
-        raise ValueError("Укажите хотя бы одну подсеть, напр. 10.0.10.0/24")
+        raise ValueError("Укажите подсеть, напр. 10.0.10.0/24")
     nets = []
     for part in text.replace(";", ",").split(","):
         part = part.strip()
@@ -55,7 +55,7 @@ def parse_subnets(text: str) -> list:
     if not nets:
         raise ValueError("Не найдено ни одной валидной подсети")
     if len(nets) > MAX_SUBNETS:
-        raise ValueError(f"Не больше {MAX_SUBNETS} подсетей за раз "
+        raise ValueError(f"Только {MAX_SUBNETS} подсеть за раз "
                          f"(получено {len(nets)})")
     total = sum(net.num_addresses for net in nets)
     if total > MAX_TOTAL_HOSTS:

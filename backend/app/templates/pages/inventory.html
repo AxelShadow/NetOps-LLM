@@ -75,14 +75,14 @@
             ⟳ Синхронизировать с Zabbix
         </button>
     </div>
-    {# SNMP-Discovery принтеров (Этап 19): до 4 подсетей /24, community,
-       порт и таймаут опроса. Синхронный HTMX-запрос — до минуты на /24 #}
+    {# SNMP-Discovery принтеров (Этап 19): одна подсеть с маской до /22,
+       community, порт и таймаут опроса. Синхронный HTMX-запрос — до минуты #}
     <form hx-post="/admin/inventory/discover-printers"
-          hx-confirm="Искать принтеры по SNMP в указанных подсетях? Это займёт до минуты."
+          hx-confirm="Искать принтеры по SNMP в указанной подсети? Это займёт до минуты."
           hx-target="#inventory-table"
           class="flex flex-wrap items-end gap-2 mt-2">
         <div>
-            <label class="block text-xs font-medium text-slate-500 mb-1" for="d-subnets">Подсети (через запятую)</label>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="d-subnets">Подсеть (маска до /22)</label>
             <input id="d-subnets" name="subnets" type="text" required
                    placeholder="10.0.10.0/24"
                    class="text-sm rounded-md border border-slate-300 px-2 py-1.5 w-64">
@@ -103,7 +103,7 @@
                    class="text-sm rounded-md border border-slate-300 px-2 py-1.5 w-20">
         </div>
         <button type="submit"
-                class="px-3 py-1.5 rounded-md bg-teal-600 text-white text-sm font-medium hover:bg-teal-700">
+                class="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700">
             🔎 Найти принтеры (SNMP)
         </button>
     </form>

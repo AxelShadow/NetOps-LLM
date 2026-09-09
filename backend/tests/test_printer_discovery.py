@@ -71,15 +71,16 @@ def check(name: str, ok: bool, detail: str = ""):
 
 
 def scenario_parse_subnets():
-    """1) Валидация подсетей."""
+    """1) Валидация подсетей: ОДНА подсеть, маска до /22."""
     nets = D.parse_subnets("10.0.10.0/24")
     check("одна /24", [str(n) for n in nets] == ["10.0.10.0/24"],
           f"got {nets}")
-    nets = D.parse_subnets("10.0.10.0/24, 10.0.20.0/24")
-    check("две через запятую", len(nets) == 2, f"got {len(nets)}")
     nets = D.parse_subnets("10.0.10.5/24")     # strict=False: нормализуется
     check("хостовый адрес нормализуется в сеть",
           str(nets[0]) == "10.0.10.0/24", f"got {nets[0]}")
+    nets = D.parse_subnets("10.0.0.0/22")
+    check("/22 (1024 адреса) проходит — нижняя граница маски",
+          str(nets[0]) == "10.0.0.0/22", f"got {nets}")
 
     def expect_err(text, name):
         try:
@@ -91,18 +92,13 @@ def scenario_parse_subnets():
     expect_err("", "пустая строка -> ValueError")
     expect_err("abc", "мусор -> ValueError")
     expect_err("2001:db8::/32", "IPv6 -> ValueError")
-    expect_err("10.0.0.0/23", "/23 крупнее /24 -> ValueError")
-    expect_err(",".join(f"10.0.{i}.0/24" for i in range(5)),
-               "5 подсетей -> ValueError")
-    # 4 x /24 = 1016 адресов — ок; суммарный лимит проверяем на /22
+    expect_err("10.0.0.0/21", "/21 крупнее /22 -> ValueError")
+    expect_err("10.0.1.0/24, 10.0.2.0/24", "две подсети -> ValueError")
     try:
-        D.parse_subnets("10.0.0.0/22")
-        check("суммарно >1024 адресов -> ValueError", False, "не упал")
-    except ValueError:
-        check("суммарно >1024 адресов -> ValueError", True)
-    check("4 подсети /24 проходят (лимит MAX_SUBNETS)",
-          len(D.parse_subnets("10.0.1.0/24,10.0.2.0/24,10.0.3.0/24,"
-                              "10.0.4.0/24")) == 4)
+        D.parse_subnets("10.0.0.0/23")
+        check("/23 проходит (между /22 и /24)", True)
+    except ValueError as e:
+        check("/23 проходит (между /22 и /24)", False, str(e))
 
 
 def scenario_probe_ip():
