@@ -38,6 +38,7 @@
                 <option value="">Все</option>
                 <option value="manual">manual</option>
                 <option value="zabbix">zabbix</option>
+                <option value="snmp">snmp</option>
             </select>
         </div>
         <div>
@@ -74,6 +75,38 @@
             ⟳ Синхронизировать с Zabbix
         </button>
     </div>
+    {# SNMP-Discovery принтеров (Этап 19): до 4 подсетей /24, community,
+       порт и таймаут опроса. Синхронный HTMX-запрос — до минуты на /24 #}
+    <form hx-post="/admin/inventory/discover-printers"
+          hx-confirm="Искать принтеры по SNMP в указанных подсетях? Это займёт до минуты."
+          hx-target="#inventory-table"
+          class="flex flex-wrap items-end gap-2 mt-2">
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="d-subnets">Подсети (через запятую)</label>
+            <input id="d-subnets" name="subnets" type="text" required
+                   placeholder="10.0.10.0/24"
+                   class="text-sm rounded-md border border-slate-300 px-2 py-1.5 w-64">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="d-community">Community</label>
+            <input id="d-community" name="community" type="text" value="public"
+                   class="text-sm rounded-md border border-slate-300 px-2 py-1.5 w-28">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="d-port">Порт</label>
+            <input id="d-port" name="port" type="number" value="161" min="1" max="65535"
+                   class="text-sm rounded-md border border-slate-300 px-2 py-1.5 w-20">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="d-timeout">Таймаут, с</label>
+            <input id="d-timeout" name="timeout" type="number" value="1" min="0.5" max="3" step="0.5"
+                   class="text-sm rounded-md border border-slate-300 px-2 py-1.5 w-20">
+        </div>
+        <button type="submit"
+                class="px-3 py-1.5 rounded-md bg-teal-600 text-white text-sm font-medium hover:bg-teal-700">
+            🔎 Найти принтеры (SNMP)
+        </button>
+    </form>
     {# Массовые действия: чекбоксы в таблице (components/inventory/table.html),
        отправка — JS InvBulk (скрипт внизу страницы), не <form> — чтобы
        не конфликтовать с HTMX-фильтрами #}

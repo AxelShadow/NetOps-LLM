@@ -8,6 +8,7 @@ import time
 import datetime as dt
 from typing import Optional, Any
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 from cachetools import TTLCache
 
@@ -791,6 +792,151 @@ def printer_info(device: str):
                          "Распечатанные страницы — поле pages_printed "
                          "из prtMarkerLifeCount."),
     }, ensure_ascii=False, default=str), "ok"
+
+
+# --- Сводный отчёт по всем принтерам (Этап 19) ---
+# Композитный вызов одного шага агента вместо printer_info по одному:
+# 20 шагов MAX_AGENT_STEPS не хватает на 100+ принтеров, а полный JSON
+# printer_info на всех превышает MAX_RESULT (обрезка -> битый JSON).
+# Поэтому: параллельный опрос потоками, ОДНА строка на принтер и
+# бюджет символов _COMPACT_BUDGET < MAX_RESULT.
+
+_PROBE_TIMEOUT = 1.0      # таймаут SNMP-запроса в сводном отчёте, сек
+_PROBE_WORKERS = 16       # потоков параллельного опроса принтеров
+_COMPACT_BUDGET = 15000   # симв. бюджет блока printers (до MAX_RESULT 20000)
+_LOW_TONER = 15           # тонер ниже этого % = проблема
+
+
+def _probe_printer_one_line(name: str, host: str, call: dict) -> dict:
+    """Один принтер -> компактная строка отчёта (без verbose-полей).
+
+    6 walk'ов Printer-MIB с коротким таймаутом _PROBE_TIMEOUT. Первый
+    walk (серийная таблица) бросил SnmpError -> хост недоступен,
+    остальные walk'и не делаем. ORM-объект не передаётся: name/host/call
+    сняты в плоские значения в сессии ДО выхода в потоки.
+    """
+    def walk_to_dict(oid: str) -> dict:
+        return {full.rsplit(".", 1)[-1]: val
+                for full, val in _snmp_walk(host, oid, timeout=_PROBE_TIMEOUT,
+                                            **call)}
+
+    serials = walk_to_dict("1.3.6.1.2.1.43.5.1.1.17")
+    pages = walk_to_dict("1.3.6.1.2.1.43.10.2.1.4")
+    toner_max = walk_to_dict("1.3.6.1.2.1.43.11.1.1.8")
+    toner_level = walk_to_dict("1.3.6.1.2.1.43.11.1.1.9")
+    status = walk_to_dict("1.3.6.1.2.1.25.3.5.1.1")
+    errors_raw = walk_to_dict("1.3.6.1.2.1.25.3.5.1.2")
+
+    serial = next((v for v in serials.values() if v), None)
+    pages_printed = next((v for v in pages.values()
+                          if isinstance(v, int)), None)
+    toner_pct = None
+    for sub, level in toner_level.items():
+        max_level = toner_max.get(sub)
+        if (isinstance(level, int) and isinstance(max_level, int)
+                and max_level > 0 and level >= 0):
+            toner_pct = round(level / max_level * 100, 1)
+            break
+    unit_errors = []
+    for sub, err_raw in errors_raw.items():
+        unit_errors = _decode_printer_errors(err_raw)
+        if unit_errors:
+            break
+    sub_status = next(iter(status.values()), None)
+    return {
+        "name": name,
+        "host": host,
+        "status": _PRINTER_STATUS.get(sub_status, sub_status),
+        "pages_printed": pages_printed,
+        "toner_percent": toner_pct,
+        "errors": unit_errors,
+        "serial": str(serial) if serial else None,
+    }
+
+
+@register_tool(
+    name="get_printers_report",
+    description="Сводный отчёт по ВСЕМ принтерам инвентаря за ОДИН вызов: "
+                "статус, счётчик распечатанных страниц, уровень тонера %, "
+                "ошибки, серийный номер — одна строка на принтер; недоступные "
+                "отдельным списком. Вызывать на «дай информацию по принтерам», "
+                "«состояние принтеров», «отчёт по принтерам»",
+    parameters={"type": "object",
+                "properties": {},
+                "required": []},
+    cache_ttl=120,
+    is_composite=True
+)
+def get_printers_report():
+    with SessionLocal() as db:
+        printers = db.query(Device).filter(
+            Device.enabled.is_(True),
+            Device.type == DeviceType.printer).all()
+        if not printers:
+            raise Exception("В инвентаре нет включённых принтеров")
+        flat = [(d.name, d.host, _snmp_call(d)) for d in printers]
+
+    rows, unreachable = [], []
+    with ThreadPoolExecutor(max_workers=_PROBE_WORKERS) as pool:
+        futures = {pool.submit(_probe_printer_one_line, n, h, c): n
+                   for n, h, c in flat}
+        for fut in futures:
+            try:
+                rows.append(fut.result())
+            except Exception as e:
+                unreachable.append({"name": futures[fut], "error": str(e)})
+
+    def is_problem(r: dict) -> bool:
+        return bool(r["errors"]) or (r["toner_percent"] is not None
+                                      and r["toner_percent"] < _LOW_TONER)
+
+    problem_rows = [r for r in rows if is_problem(r)]
+    healthy_rows = [r for r in rows if not is_problem(r)]
+    # Бюджет _COMPACT_BUDGET (< MAX_RESULT 20000) считается по ИТОГОВОМУ
+    # JSON целиком — включая unreachable и структурные поля. 76+
+    # проблемных при полном формате сами по себе превысили бы MAX_RESULT
+    # (битый JSON после обрезки execute_tool) — поэтому problem-строки
+    # тоже деградируют: сначала выпадает serial, затем строка целиком
+    # уходит в remaining_problems.
+    def _compact(r: dict) -> dict:
+        return {k: v for k, v in r.items() if k != "serial"}
+
+    def _build(included, rem_h, rem_p) -> str:
+        return json.dumps({
+            "summary": {
+                "total": len(flat),
+                "healthy": len(healthy_rows),
+                "with_problems": len(problem_rows),
+                "unreachable": len(unreachable),
+            },
+            "printers": included,
+            "remaining_healthy": rem_h,
+            "remaining_problems": rem_p,
+            "note_unlisted": ("Полный список сокращён бюджетом: имена в "
+                              "remaining_* — данные есть, но не показаны; "
+                              "спроси по конкретному принтеру printer_info."
+                              if rem_h or rem_p else ""),
+            "unreachable": unreachable,
+            "note": "Одна строка на принтер; подробности по конкретному — "
+                    "printer_info.",
+        }, ensure_ascii=False, default=str)
+
+    included, remaining_healthy, remaining_problems = [], [], []
+    for r in problem_rows:
+        if len(_build(included + [r], [], [])) <= _COMPACT_BUDGET:
+            included.append(r)
+        elif len(_build(included + [_compact(r)], [], [])) <= _COMPACT_BUDGET:
+            included.append(_compact(r))       # без serial, но с ошибками
+        else:
+            remaining_problems.append(r["name"])
+    for r in healthy_rows:
+        if len(_build(included + [r], remaining_healthy,
+                      remaining_problems)) <= _COMPACT_BUDGET:
+            included.append(r)
+        else:
+            remaining_healthy.append(r["name"])
+
+    return _build(included, remaining_healthy, remaining_problems), "ok"
 
 
 # --- Composite Tools ---

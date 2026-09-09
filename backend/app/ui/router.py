@@ -973,6 +973,40 @@ def inventory_sync_zabbix(request: Request,
                      source_f=None, status_f=None, group_f=None, flash=message)
 
 
+@router.post("/inventory/discover-printers")
+def inventory_discover_printers(
+        request: Request,
+        subnets: str = Form(""),
+        community: str = Form("public"),
+        port: int = Form(161),
+        timeout: float = Form(1.0),
+        db: Session = Depends(get_db),
+        user: User = Depends(require_roles_page(Role.admin))):
+    """SNMP-Discovery принтеров (Этап 19): HTMX-свап таблицы с flash,
+    паттерн sync-zabbix. Сетевой обзор синхронный — до ~минуты на /24."""
+    from ..api.devices import sync_printer_discovery as api_sync
+    community = community.strip() or "public"
+    port = max(1, min(65535, port or 161))
+    timeout = max(0.5, min(3.0, timeout or 1.0))
+    try:
+        r = api_sync(db, subnets=subnets, community=community,
+                     timeout=timeout, port=port)
+    except ValueError as e:      # невалидные подсети — ошибка для flash
+        return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
+                         source_f=None, status_f=None, group_f=None,
+                         flash=f"SNMP: {e}")
+    except HTTPException as e:
+        return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
+                         source_f=None, status_f=None, group_f=None,
+                         flash=f"SNMP: {e.detail}")
+    message = ("SNMP: найдено %d, добавлено %d, обновлено %d, "
+               "пропущено %d (опросено %d адресов)"
+               % (r["found"], r["added"], r["updated"], r["skipped"],
+                  r["probed"]))
+    return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,
+                     source_f=None, status_f=None, group_f=None, flash=message)
+
+
 @router.put("/inventory/{device_id}")
 async def inventory_update(device_id: int, request: Request,
                      db: Session = Depends(get_db),

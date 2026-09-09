@@ -385,6 +385,30 @@ def mock_get_infrastructure_health(args: dict) -> tuple[str, str]:
     })
 
 
+def mock_get_printers_report(args: dict) -> tuple[str, str]:
+    return _json({
+        "summary": {"total": 3, "healthy": 1, "with_problems": 1,
+                    "unreachable": 1},
+        "printers": [
+            {"name": "hq-printer-1", "host": "192.0.2.150",
+             "status": "printing", "pages_printed": 12345,
+             "toner_percent": 42.0, "errors": [], "serial": "MOCK12345"},
+            {"name": "branch-printer-2", "host": "192.0.2.151",
+             "status": "idle", "pages_printed": 987,
+             "toner_percent": 8.0, "errors": ["lowToner"],
+             "serial": "MOCK67890"},
+        ],
+        "remaining_healthy": [],
+        "unreachable": [
+            {"name": "storage-printer-3", "error":
+             "SnmpError: WALK 192.0.2.152: No SNMP response received "
+             "before timeout"},
+        ],
+        "note": "Одна строка на принтер; подробности по конкретному — "
+                "printer_info.",
+    })
+
+
 # Словарь: имя инструмента -> мок-функция (args: dict) -> (json-строка, status)
 MOCK_TOOLS = {
     "ping": mock_ping,
@@ -406,4 +430,5 @@ MOCK_TOOLS = {
     "printer_info": mock_printer_info,
     "get_device_full_health": mock_get_device_full_health,
     "get_infrastructure_health": mock_get_infrastructure_health,
+    "get_printers_report": mock_get_printers_report,
 }

@@ -161,6 +161,62 @@ def sync_zabbix(db: Session = Depends(get_db),
             "disabled_gone": disabled, "total_zabbix": len(hosts)}
 
 
+def sync_printer_discovery(db: Session, *, subnets: str,
+                           community: str = "public", timeout: float = 1.0,
+                           port: int = 161) -> dict:
+    """SNMP-Discovery принтеров (Этап 19): поиск по подсетям, добавление
+    в инвентарь выключенными (source="snmp", группа «Принтеры») —
+    зеркало sync_zabbix. Пропавшие НЕ отключаем: принтер мог просто
+    выключиться; discovery = «найти новое и обновить найденное».
+    Чистая функция (без Depends): вызывается из UI-роутера.
+    """
+    from ..devices.printer_discovery import discover_printers, parse_subnets
+
+    networks = parse_subnets(subnets)
+    try:
+        disc = discover_printers(networks, community=community,
+                                 timeout=timeout, port=port)
+    except Exception as e:
+        raise HTTPException(502, f"Ошибка SNMP-обзора сети: {e}")
+
+    snmp_existing = {d.host: d for d in db.query(Device).filter(
+        Device.source == "snmp",
+        Device.type == DeviceType.printer).all()}
+    taken_names = {d.name: d.id for d in db.query(Device).all()}
+    added = updated = skipped = 0
+
+    for p in disc["found"]:
+        ip = p["ip"]
+        sys_descr = p["sys_descr"] or ""
+        existing = snmp_existing.get(ip)
+        if existing is not None:
+            # Найдено прошлым discovery: обновляем (имя в инвентаре
+            # НЕ трогаем — его мог переименовать пользователь).
+            existing.snmp_community = community
+            existing.description = f"SNMP: {sys_descr[:100]}"
+            updated += 1
+            continue
+        if db.query(Device).filter(Device.host == ip).first() is not None:
+            skipped += 1     # другой источник/тип с этим host — не дублируем
+            continue
+        name = _norm_name(p["sys_name"] or f"printer-{ip}")
+        if name in taken_names:
+            name = f"{name}-{ip}"
+        db.add(Device(
+            type=DeviceType.printer, enabled=False,
+            host=ip, port=port, group="Принтеры", source="snmp",
+            snmp_version="2c", snmp_community=community,
+            name=name, description=f"SNMP: {sys_descr[:100]}"))
+        taken_names[name] = -1
+        added += 1
+
+    db.commit()
+    clear_cache()
+    return {"found": len(disc["found"]), "probed": disc["probed"],
+            "responded": disc["responded"], "added": added,
+            "updated": updated, "skipped": skipped}
+
+
 @router.patch("/{device_id}")
 def update_device(device_id: int, data: DevicePatch,
                   db: Session = Depends(get_db),
