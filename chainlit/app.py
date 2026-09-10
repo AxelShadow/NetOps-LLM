@@ -72,6 +72,6 @@ async def on_message(message: cl.Message) -> None:
             await answer.update()
     except BackendError as e:
         # дружественный текст, без стека/URL/деталей
-        thinking.output = "Ошибка"
+        thinking.output = "Ошибка соединения с сервером"
         await thinking.update()
         await answer.update(content=e.user_message)

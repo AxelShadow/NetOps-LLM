@@ -653,6 +653,106 @@ auth_request, всё в docker-compose. Backend — единственный и�
   KeyError в wrapper); (3) таблица инвентаря в HTML страницы — только
   «Загрузка…», реальные строки — GET /admin/inventory/partial/table.
 
+### Этап 20 — UX-этап: ошибки агента, настройки, протоколы, Aruba/EdgeCore, отчёт по страницам (готово, 2026-09-09)
+- **Повод (живое тестирование)**: (1) запрос «покажи количество
+  распечатанных страниц» → в чате голое «Ошибка» без пояснения, в
+  аудите пусто; (2) добавление eltex по SNMP → 400 Bad Request в
+  консоли браузера, в UI тишина. Плюс блок пожеланий: отчёт по
+  страницам, DNS/MAC в discovery, выбор протокола при добавлении,
+  типы Aruba/EdgeCore, редактируемые контекст/шаги агента.
+- **Диагноз бага 1**: аудит пишет только execute_tool (tools.py) —
+  пустой аудит означал «цикл умер ДО вызова инструмента»; единый
+  except в run_agent_cycle показывал «Сервер LLM недоступен» для
+  ЛЮБОЙ ошибки (в т.ч. 400 context-length от LM Studio); голое
+  «Ошибка» ставил chainlit при BackendError (HTTP-сбой стрима).
+  **Диагноз бага 2**: сервер честно возвращал форму с текстом ошибки
+  (400), но htmx 2.0.4 по умолчанию НЕ свапает 4xx/5xx (в 1.x
+  свапал) → в консоли 400, в UI тишина.
+- **Ошибки агента (chat.py)**: _llm_error_text классифицирует
+  openai-исключения (BadRequestError с контекст-хинтом,
+  APITimeoutError, APIConnectionError, Auth, RateLimit) — текст
+  уходит в SSE error + запись аудита tool="agent" status="error"
+  (_audit_agent_error, один раз при выходе по ошибке). chainlit:
+  «Ошибка соединения с сервером» вместо голого «Ошибка», READ_TIMEOUT
+  60→120 с (первый токен LM Studio при большом промпте опаздывает).
+- **Настройки агента (AppSetting)**: таблица app_settings(key,value),
+  env-дефолты NETOPS_AGENT_CONTEXT_CHARS=50000/NETOPS_AGENT_MAX_STEPS=20;
+  _agent_settings() в run_agent_cycle читает эффективные значения (БД
+  перекрывает env), _trim_history_by_chars режет историю по бюджету
+  СИМВОЛОВ от старых к новым (раньше бюджета не было вовсе: 20
+  сообщений × tool-результаты до 20К симв легко переполняли окно
+  модели → 400). Админка: /admin/settings — секция «Параметры агента»
+  (HTMX-partial, POST /admin/settings/agent, диапазоны контекст
+  10000–200000 / шаги 1–50; при ошибке — 200 с инлайн-блоком, не
+  4xx — см. граблю htmx).
+- **get_printers_pages_report** (tools.py, is_composite, TTL 120):
+  отчёт по распечатанным страницам за ОДИН вызов — summary
+  total/reachable/unreachable/mono/color/total_pages, построчно
+  pages_printed + признак color; цветность определяется по
+  ОПИСАНИЯМ картриджей (prtMarkerSuppliesDescription 43.11.1.1.6 —
+  строки «Cyan/Magenta/Yellow Toner», а НЕ role-таблица: role — это
+  43.12.1.1.3; находка верификатора: эвристика «supplies>1 = цветной»
+  ломалась на моно с waste-боксом — тонер + waste-бокс = 2 supplies);
+  у цветных cartridges с уровнями %, тонер считается по toner_level
+  независимо от описаний. Счётчиков страниц ПО ЦВЕТАМ в Printer-MIB
+  нет — честная приписка в note. Бюджет _COMPACT_BUDGET: деградация
+  cartridges → remaining. SYSTEM_PROMPT правило 14 + инвентарь-хвост:
+  «сколько страниц» = один get_printers_pages_report.
+- **Discovery: MAC + DNS + дедуп**: probe_ip обогащается MAC (walk
+  ifPhysAddress 2.2.1.6, prettyPrint '0x…' → aa:bb:…) и PTR-именем
+  (поток с join-таймаутом 2 с — gethostbyaddr не умеет таймаут).
+  sync_printer_discovery: snmp-принтер ищется по host ИЛИ MAC (смена
+  IP по DHCP ловится MAC → host переносится, НО перенос на IP,
+  занятый чужим устройством, отклоняется — skip, host прежнего
+  устройства не трогаем), чужой host ИЛИ MAC → skip; имя sysName |
+  dnsName | printer-{ip}; обновляются community/description/mac/
+  dns_name.
+- **Инвентарь: протоколы и типы**: Device.protocol ("ssh,snmp"/"ssh"/
+  "snmp"/""), мак/dns_name колонки + _DEVICE_MIGRATIONS. Форма: два
+  чекбокса SSH/SNMP, кнопка «Добавить» (add) / «Сохранить» (edit).
+  При НЕудачном сабмите (провал проверки подключения или валидации
+  _inv_upsert) форма перерисовывается с ВВЕДЁННЫМИ значениями —
+  _inv_form(form=data) считает vals с приоритетом form ?? device ??
+  пусто (все поля, включая group/description). Чекбоксы (протоколы
+  и «Включено»): снятый чекбокс НЕ попадает в form-data, поэтому
+  при form решение ТОЛЬКО по сабмиту пользователя — иначе снятый
+  протокол молча вернулся бы из device.protocol (regress-грабля
+  верификатора). DeviceType + aruba + edgecore (гвард _snmp_target,
+  SYSTEM_PROMPT, _ensure_printer_enum_value — ALTER TYPE для
+  printer/aruba/edgecore).
+- **Блокирующая проверка подключения при создании**
+  (devices/connectivity.py + POST /admin/inventory): snmp → реальный
+  GET sysDescr (порт семантика как _snmp_call: printer — порт формы,
+  сетевые всегда 161); ssh → TCP-connect 5 с (классифицированные
+  тексты: таймаут/refused/no route/DNS); оба → обе проверки; protocol
+  пуст → vmware/esxi TCP 443, прочие ICMP ping. Провал → 400 + форма
+  с ошибкой (для htmx — свап через hx-on::response-error в форме).
+  Вызов через asyncio.to_thread (snmp_get делает asyncio.run).
+  PUT-редактирование НЕ проверяет (проверка только при создании).
+- **Фикс htmx 4xx-тишины**: форма устройства (form.html) получила
+  hx-on::response-error — свапит responseText (форма с текстом
+  ошибки) в модалку. Глобальный htmx-config НЕ трогали (задел бы
+  flash-механику sync-zabbix/discovery).
+- **Тесты**: test_agent_settings.py (15), test_printers_pages_report.py
+  (15), test_printer_discovery.py 26→36 (MAC/DNS/дедуп по MAC),
+  test_snmp_migration.py 16→27 (колонки/protocol/aruba/кнопка +
+  regress: снятые чекбоксы не восстанавливаются из БД),
+  test_admin_ui_inventory.py 35→42 (проверка подключения
+  блокирует/пропускает, классификация TCP), test_e2e_flow.py —
+  подмена проверки (create в тестах на фейковых host). Грабля:
+  тесты, создающие устройства POST-ом, обязаны подменять
+  app.devices.connectivity.check_device_connectivity (локальный
+  импорт в эндпоинте — подмена на модуле работает). test_mock_mode:
+  20→21. Runner: 24 набора.
+- **Грабли этапа**: (1) htmx 2.x свапает только 2xx/3xx — все новые
+  инлайн-ошибки форм отдаём со статусом 200 (кроме _inv_upsert,
+  который свапается hx-on::response-error); (2) OID 43.11.1.1.6 —
+  это prtMarkerSuppliesDescription (строки-описания картриджей), а
+  НЕ prtMarkerSuppliesColorantRole (тот — 43.12.1.1.3): цветность
+  определяется по словам Cyan/Magenta/Yellow/Black в описаниях;
+  (3) POST-валидация настроек агента возвращает 200+инлайн-ошибку,
+  не 400.
+
 1. **Zabbix 6.2**: токен работает только параметром `auth` в теле JSON-RPC
    (заголовок Authorization: Bearer — не сработал); URL — http, не https;
    sortfield "clock" у problem.get запрещён; selectHosts у problem.get молча
@@ -716,7 +816,7 @@ auth_request, всё в docker-compose. Backend — единственный и�
 | `zabbix_items` | 120s | Последние значения метрик устройства |
 | `zabbix_history` | 60s | История метрики (до 7 дней) |
 
-### SNMP (v2c, read-only; принтеры + сетевые eltex/mikrotik/usergate)
+### SNMP (v2c, read-only; принтеры + сетевые eltex/mikrotik/usergate/aruba/edgecore)
 | Инструмент | TTL | Описание |
 |---|---|---|
 | `snmp_info` | 120s | sysDescr/sysName/sysContact/sysLocation/uptime |
@@ -730,6 +830,7 @@ auth_request, всё в docker-compose. Backend — единственный и�
 | `get_device_full_health` | 120s | Полная диагностика одного устройства |
 | `get_infrastructure_health` | 120s | Обзор проблем всей инфраструктуры |
 | `get_printers_report` | 120s | Все принтеры за ОДИН вызов: 1 строка/принтер + недоступные; бюджет 15К против обрезки MAX_RESULT |
+| `get_printers_pages_report` | 120s | Отчёт по распечатанным страницам (Этап 20): суммарно + в разрезе, mono/color, картриджи с уровнями %; один вызов на «сколько страниц напечатано» |
 
 **MAX_RESULT** = 20000 символов (обрезка вывода инструмента).
 
@@ -747,19 +848,21 @@ auth_request, всё в docker-compose. Backend — единственный и�
 - vCenter: проверять хосты/датасторы/события; сенсоры — только для standalone ESXi.
 - **Принтеры и сетевые → SNMP-инструменты** (snmp_info/snmp_interfaces/
   snmp_walk/printer_info). Отчёт по ВСЕМ принтерам — ОДИН вызов
-  get_printers_report (не printer_info по очереди); printer_info — только
-  подробности по одному. Счётчик сканов вендорозависим — честно сообщать,
-  не выдумывать; распечатанные страницы = pages_printed.
+  get_printers_report (не printer_info по очереди); «сколько распечатанных
+  страниц» — ОДИН вызов get_printers_pages_report (суммарно + в разрезе,
+  цветные помечены картриджами; счётчиков по цветам вендоры не отдают).
+  printer_info — только подробности по одному. Счётчик сканов
+  вендорозависим — честно сообщать, не выдумывать; распечатанные
+  страницы = pages_printed.
 
 build_system_prompt добавляет: текущее время + список включённых устройств.
 
 ## 8. Известные недочёты и несоответствия
 
 - Пароли устройств в БД открытым текстом — перед продом шифровать (Fernet + ключ из env).
-- В UI-форме есть типы edgecore/snr/aruba, но в DeviceType их пока нет
-  (шаг с netmiko не применялся) — добавляются одним изменением enum вместе с SSH-этапом.
 - Нет refresh-токенов (JWT на 12 часов).
-- netmiko/net_show/ssh_cli.py — НЕ вносились в код (шаг пропущен осознанно).
+- netmiko/net_show/ssh_cli.py — НЕ вносились в код (шаг пропущен осознанно;
+  типы aruba/edgecore в DeviceType уже добавлены — Этап 20, snr пока нет).
 - Ключи адаптера VMware (cpu_usage_percent, free_percent) зависят от реализации
   vmware.py — при изменении адаптера нужно обновить _get_free_percent и пороги.
 - get_printers_report: бюджет _COMPACT_BUDGET не деградирует список
@@ -795,16 +898,20 @@ build_system_prompt добавляет: текущее время + список
 - Этап 19 (композитный отчёт принтеров + SNMP-Discovery) — готово,
   см. §5 и §7; runner 22/22. Живое подтверждение: отчёт по 4 реальным
   принтерам одним вызовом, discovery по принтерным подсетям.
+- Этап 20 (UX: ошибки агента + настройки, отчёт по страницам, MAC/DNS
+  discovery, протоколы+проверка подключения, aruba/edgecore) — готово,
+  см. §5; runner 24/24.
 
-### Ближайший шаг (сделано — Этап 18, SNMP): краткий итог
-- Прямой SNMP для ручных устройств реализован (v2c, pysnmp): snmp_info /
-  snmp_interfaces / snmp_walk / printer_info (скилл принтеров, счётчик
-  распечатанных страниц, тонер, статус/ошибки; device="all").
-- Community хранится в инвентаре (snmp_version/snmp_community, авто-миграция
-  при старте). Счётчик сканов вендорозависим — отдаётся null с пояснением.
-- Возможное развитие: SNMPv3 (authPriv), enterprise-MIB моделей принтеров
-  для счётчика сканов (HP/Kyocera), edgecore/snr/aruba в DeviceType при
-  SSH-этапе (ENUM уже расширяется по образцу printer).
+### Ближайший шаг (сделано — Этап 20, UX-этап): краткий итог
+- Ошибки агента классифицированы и видны пользователю + аудит
+  (tool="agent"); бюджет контекста 50К симв (настраивается из админки),
+  лимит шагов — тоже (таблица app_settings).
+- Отчёт по страницам get_printers_pages_report: суммарно/в разрезе,
+  цветность по картриджам; discovery ищет MAC/DNS, дедуп по MAC+IP.
+- Инвентарь: протоколы ssh/snmp (2 чекбокса), блокирующая проверка
+  подключения при «Добавить» с внятными ошибками, типы aruba/edgecore.
+- Возможное развитие: enterprise-MIB моделей принтеров для счётчика
+  сканов и цветных страниц (HP/Kyocera), snr в DeviceType.
 
 ### Затем
 - SSH CLI (netmiko) для Eltex/EdgeCore/SNR/Aruba с белым списком read-only команд

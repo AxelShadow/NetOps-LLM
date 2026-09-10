@@ -25,6 +25,8 @@ MAX_WORKERS = 32       # потоков параллельного опроса
 
 _SYS_OIDS = ["1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.5.0"]  # sysDescr, sysName
 _SERIAL_OID = "1.3.6.1.2.1.43.5.1.1.17"                  # prtGeneralSerialNumber
+_IF_PHYS_ADDRESS = "1.3.6.1.2.1.2.2.1.6"                # ifPhysAddress (MAC)
+_DNS_TIMEOUT = 2.0   # сек на PTR-резолв (gethostbyaddr без таймаута!)
 
 
 def parse_subnets(text: str) -> list:
@@ -64,6 +66,45 @@ def parse_subnets(text: str) -> list:
     return nets
 
 
+def _norm_mac(value) -> str | None:
+    """'0x001b1e2f3a4c' (prettyPrint OctetString) -> 'aa:bb:cc:dd:ee:ff'.
+
+    pysnmp отдаёт бинарный MAC как hex-строку с префиксом 0x; поля
+    ifPhysAddress бывают с ведущими нулями по байтам. None/мусор -> None.
+    """
+    if not isinstance(value, str) or not value.startswith("0x"):
+        return None
+    hexpart = value[2:]
+    if len(hexpart) != 12 or any(c not in "0123456789abcdefABCDEF"
+                                 for c in hexpart):
+        return None
+    return ":".join(hexpart[i:i + 2].lower() for i in range(0, 12, 2))
+
+
+def _resolve_dns(ip: str, timeout: float = _DNS_TIMEOUT) -> str:
+    """PTR-запись адреса -> имя хоста (без зоны — ''), с таймаутом.
+
+    socket.gethostbyaddr не умеет таймаут — гоним в потоке-демоне и
+    ждём join(timeout): локальный DNS-резолвер может молчать. probe_ip
+    и так исполняется в ThreadPoolExecutor'е discovery, ещё один поток
+    на найденный принтер (их единицы) — дёшево.
+    """
+    import socket
+    result: list = [""]        # замыкание для потока
+
+    def _do():
+        try:
+            result[0] = socket.gethostbyaddr(ip)[0]
+        except Exception:
+            result[0] = ""
+
+    import threading
+    t = threading.Thread(target=_do, daemon=True)
+    t.start()
+    t.join(timeout)
+    return result[0]
+
+
 def probe_ip(ip: str, community: str = "public", timeout: float = 1.0,
              port: int = 161) -> dict | None:
     """Один адрес -> данные принтера | None (не принтер / молчит).
@@ -73,6 +114,9 @@ def probe_ip(ip: str, community: str = "public", timeout: float = 1.0,
     (авторитетно: свитчи/серверы её не реализуют); (3) иначе ключевые
     слова printer-моделей в sysDescr -> принтер (serial=None);
     (4) иначе None (SNMP отвечает, но это не принтер).
+
+    Найденный принтер обогащается (Этап 20): MAC — первый непустой
+    ifPhysAddress, DNS-имя — PTR-запись (если есть).
     """
     try:
         sys_vals = snmp_get(ip, _SYS_OIDS, community=community,
@@ -87,13 +131,21 @@ def probe_ip(ip: str, community: str = "public", timeout: float = 1.0,
     except Exception:
         serial_rows = []
     serial = next((str(v) for _, v in serial_rows if v), None)
-    if serial:
-        return {"ip": ip, "sys_name": sys_name, "sys_descr": sys_descr,
-                "serial": serial}
-    if _PRINTER_KEYWORDS.search(sys_descr):
-        return {"ip": ip, "sys_name": sys_name, "sys_descr": sys_descr,
-                "serial": None}
-    return None
+    if not serial and not _PRINTER_KEYWORDS.search(sys_descr):
+        return None
+    # Это принтер: MAC + DNS (Этап 20)
+    mac = None
+    try:
+        if_rows = snmp_walk(ip, _IF_PHYS_ADDRESS, community=community,
+                            timeout=timeout, port=port)
+        for _, v in if_rows:
+            mac = _norm_mac(v)
+            if mac:
+                break
+    except Exception:
+        pass
+    return {"ip": ip, "sys_name": sys_name, "sys_descr": sys_descr,
+            "serial": serial, "mac": mac, "dns_name": _resolve_dns(ip)}
 
 
 def discover_printers(networks: list, community: str = "public",

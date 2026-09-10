@@ -21,6 +21,10 @@ class Settings(BaseSettings):
 
     bootstrap_admin: str = ""
     history_messages: int = 20
+    # Параметры агента (Этап 20): env-дефолты, перекрываются runtime-
+    # настройками из БД (app_settings, /admin/settings)
+    agent_context_chars: int = 50000   # бюджет истории, символов
+    agent_max_steps: int = 20          # лимит шагов агентского цикла
 
     zabbix_url: str = ""
     zabbix_token: str = ""

@@ -539,13 +539,16 @@ def _snmp_call(device: Device) -> dict:
 
 
 def _snmp_target(name: str) -> Device:
-    """SNMP-устройство из инвентаря: printer или сетевое (eltex/mikrotik/usergate)."""
+    """SNMP-устройство из инвентаря: printer или сетевое (eltex/mikrotik/
+    usergate/aruba/edgecore)."""
     d = _get_device(name)
     if d.type not in (DeviceType.printer, DeviceType.eltex,
-                      DeviceType.mikrotik, DeviceType.usergate):
+                      DeviceType.mikrotik, DeviceType.usergate,
+                      DeviceType.aruba, DeviceType.edgecore):
         raise Exception(
             f"'{d.name}' (тип {d.type.value}) не поддерживает SNMP-опрос: "
-            f"подходят принтеры и сетевые устройства (eltex/mikrotik/usergate)")
+            f"подходят принтеры и сетевые устройства "
+            f"(eltex/mikrotik/usergate/aruba/edgecore)")
     return d
 
 
@@ -937,6 +940,156 @@ def get_printers_report():
             remaining_healthy.append(r["name"])
 
     return _build(included, remaining_healthy, remaining_problems), "ok"
+
+
+# --- Отчёт по распечатанным страницам (Этап 20) ---
+# Отдельный композит от get_printers_report: фокус запросов «сколько
+# страниц напечатано» — итог и разрез, а не проблемы. Цветность: по
+# ОПИСАНИЯМ картриджей prtMarkerSuppliesDescription (43.11.1.1.6,
+# строки «Cyan Toner Cartridge...»): описание с цветным красителем =
+# цветной картридж. Фолбэка «supplies > 1» НЕТ — waste-бокс у моно
+# принтера даёт 2 supplies (находка верификатора: типовой моно
+# помечался цветным). Счётчиков страниц ПО ЦВЕТАМ в Printer-MIB нет —
+# честная приписка в note.
+
+_SUPPLIES_DESCR = "1.3.6.1.2.1.43.11.1.1.6"  # prtMarkerSuppliesDescription
+_COLOR_RE = re.compile(r"cyan|magenta|yellow", re.IGNORECASE)
+_BLACK_RE = re.compile(r"black", re.IGNORECASE)
+
+
+def _probe_printer_pages(name: str, host: str, call: dict) -> dict:
+    """Принтер -> строка отчёта по страницам + картриджи (Этап 20).
+
+    4 walk'а с таймаутом _PROBE_TIMEOUT: pages 43.10.2.1.4,
+    descriptions 43.11.1.1.6, toner max/level 43.11.1.1.8/9. Первая
+    ошибка SNMP -> SnmpError наружу (вызывающий кладёт в unreachable).
+    """
+    def walk_to_dict(oid: str) -> dict:
+        return {full.rsplit(".", 1)[-1]: val
+                for full, val in _snmp_walk(host, oid, timeout=_PROBE_TIMEOUT,
+                                            **call)}
+
+    pages = walk_to_dict("1.3.6.1.2.1.43.10.2.1.4")
+    descr = walk_to_dict(_SUPPLIES_DESCR)
+    toner_max = walk_to_dict("1.3.6.1.2.1.43.11.1.1.8")
+    toner_level = walk_to_dict("1.3.6.1.2.1.43.11.1.1.9")
+
+    pages_printed = next((v for v in pages.values()
+                          if isinstance(v, int)), None)
+
+    def _pct(sub) -> float | None:
+        level, max_level = toner_level.get(sub), toner_max.get(sub)
+        if (isinstance(level, int) and isinstance(max_level, int)
+                and max_level > 0 and level >= 0):
+            return round(level / max_level * 100, 1)
+        return None
+
+    cartridges = []
+    for sub, d in descr.items():
+        role = None
+        if isinstance(d, str):
+            if _COLOR_RE.search(d):
+                role = "color"
+            elif _BLACK_RE.search(d):
+                role = "black"
+        cartridges.append({
+            "supply": sub,
+            "role": role,          # None = роль по описанию не понята
+            "percent": _pct(sub),
+        })
+    # Цветной: есть картридж с цветным красителем в описании.
+    # Описаний нет вовсе (пустой walk) -> color=False: роли не
+    # выдумываем, в note честно сказано, что цветность по картриджам.
+    color = any(c["role"] == "color" for c in cartridges)
+    # Тонер — первый валидный supply (независимо от описаний)
+    toner_pct = next(
+        (p for p in (_pct(sub) for sub in toner_level)
+         if p is not None), None)
+    return {
+        "name": name,
+        "host": host,
+        "pages_printed": pages_printed,
+        "color": color,
+        "toner_percent": toner_pct,
+        "cartridges": cartridges if color else [],
+    }
+
+
+@register_tool(
+    name="get_printers_pages_report",
+    description="Отчёт по РАСПЕЧАТАННЫМ СТРАНИЦАМ всех принтеров за ОДИН "
+                "вызов: суммарно и в разрезе по принтерам; цветные "
+                "помечены (cartridges с уровнем %), отдельной цветной "
+                "статистики страниц вендоры не отдают. Вызывать на "
+                "«сколько страниц напечатано», «отчёт по страницам», "
+                "«количество распечатанных страниц»",
+    parameters={"type": "object",
+                "properties": {},
+                "required": []},
+    cache_ttl=120,
+    is_composite=True
+)
+def get_printers_pages_report():
+    with SessionLocal() as db:
+        printers = db.query(Device).filter(
+            Device.enabled.is_(True),
+            Device.type == DeviceType.printer).all()
+        if not printers:
+            raise Exception("В инвентаре нет включённых принтеров")
+        flat = [(d.name, d.host, _snmp_call(d)) for d in printers]
+
+    rows, unreachable = [], []
+    with ThreadPoolExecutor(max_workers=_PROBE_WORKERS) as pool:
+        futures = {pool.submit(_probe_printer_pages, n, h, c): n
+                   for n, h, c in flat}
+        for fut in futures:
+            try:
+                rows.append(fut.result())
+            except Exception as e:
+                unreachable.append({"name": futures[fut], "error": str(e)})
+
+    total_pages = sum(r["pages_printed"] for r in rows
+                      if isinstance(r["pages_printed"], int))
+    mono_rows = [r for r in rows if not r["color"]]
+    color_rows = [r for r in rows if r["color"]]
+    # Деградация бюджета (как get_printers_report): итоговый JSON
+    # считаем целиком; у цветных при переполнении выпадают cartridges
+    # (признак color остаётся), затем строка уходит в remaining.
+    def _build(included, remaining) -> str:
+        return json.dumps({
+            "summary": {
+                "total": len(flat),
+                "reachable": len(rows),
+                "unreachable": len(unreachable),
+                "mono": len(mono_rows),
+                "color": len(color_rows),
+                "total_pages": total_pages,
+            },
+            "printers": included,
+            "remaining": remaining,
+            "unreachable": unreachable,
+            "note": "Суммарно и по каждому принтеру. Счётчиков страниц "
+                    "по цветам вендоры не отдают: цветные помечены "
+                    "признаком color и картриджами (уровни %). Подробности "
+                    "по одному принтеру — printer_info.",
+        }, ensure_ascii=False, default=str)
+
+    included, remaining = [], []
+    for r in rows:
+        if len(_build(included + [r], [])) <= _COMPACT_BUDGET:
+            included.append(r)
+        elif (r["color"] and len(_build(included + [_compact_pages(r)],
+                                        [])) <= _COMPACT_BUDGET):
+            included.append(_compact_pages(r))    # без cartridges
+        else:
+            remaining.append(r["name"])
+
+    return _build(included, remaining), "ok"
+
+
+def _compact_pages(r: dict) -> dict:
+    """Деградированная строка цветного принтера: без cartridges."""
+    return {k: v for k, v in r.items() if k != "cartridges"}
 
 
 # --- Composite Tools ---

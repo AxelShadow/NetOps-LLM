@@ -33,8 +33,16 @@ from app.auth.jwt_utils import create_token  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.models import Device, User  # noqa: E402
 import app.devices.vmware as vmw_mod  # noqa: E402  (FIX-03: кэш сессий)
+import app.devices.connectivity as conn_mod  # noqa: E402  (Этап 20)
 
 PASS, FAIL = 0, 0
+
+# Этап 20: POST-создание делает блокирующую проверку подключения
+# (реальная сеть на тестовых host недоступна). Для сценария CRUD
+# подменяем на «всегда ок» — проверка самой блокировки тестируется
+# отдельно (см. сценарий проверки подключения ниже).
+conn_mod.check_device_connectivity = (
+    lambda **kw: (True, "мок проверки"))
 
 
 def check(name: str, ok: bool, detail: str = ""):
@@ -313,6 +321,64 @@ def main():
                        headers={"Authorization": f"Bearer {admin_token}"})
         check("GET /api/devices не сломан",
               r.status_code == 200, f"got {r.status_code}")
+
+        # --- Этап 20: блокирующая проверка подключения при create ---
+        # Подмена возвращает провал: форма возвращается с ошибкой
+        conn_mod.check_device_connectivity = (
+            lambda **kw: (False, "SNMP 10.9.9.9:161 не отвечает "
+                                 "(community «public»?): тест-провал"))
+        r = client.post("/admin/inventory",
+                        data={"name": "conn-fail", "type": "edgecore",
+                              "host": "10.9.9.9", "port": "22",
+                              "proto_snmp": "on"})
+        with SessionLocal() as db:
+            n_fail = db.query(Device).filter_by(
+                name="conn-fail").count()
+        check("провал проверки -> 400 + текст ошибки в модалке",
+              r.status_code == 400 and "тест-провал" in r.text,
+              f"got {r.status_code}")
+        check("провал проверки -> устройство НЕ создано",
+              n_fail == 0, f"n={n_fail}")
+
+        # Проверка ок -> устройство создаётся
+        conn_mod.check_device_connectivity = (
+            lambda **kw: (True, "SNMP отвечает"))
+        r = client.post("/admin/inventory",
+                        data={"name": "conn-ok", "type": "aruba",
+                              "host": "10.9.9.8", "port": "22",
+                              "proto_snmp": "on", "proto_ssh": "on"})
+        with SessionLocal() as db:
+            d_ok = db.query(Device).filter_by(name="conn-ok").first()
+        check("проверка ок -> 200, устройство создано (ssh,snmp)",
+              r.status_code == 200 and d_ok is not None
+              and d_ok.protocol == "ssh,snmp",
+              f"status={r.status_code} d={d_ok and d_ok.protocol}")
+
+        # PUT-редактирование НЕ проверяет подключение (проверка только
+        # при создании): с подменой-провалом PUT обязан пройти
+        conn_mod.check_device_connectivity = (
+            lambda **kw: (False, "не должен вызываться"))
+        r = client.put(f"/admin/inventory/{d_ok.id}",
+                       data={"name": "conn-ok", "type": "aruba",
+                             "host": "10.9.9.8", "port": "22",
+                             "proto_snmp": "on"})
+        check("PUT не блокируется проверкой подключения",
+              r.status_code == 200 and "Устройство обновлено" in r.text,
+              f"got {r.status_code}")
+
+        # --- Классификация ошибок TCP (чистые функции) ---
+        import socket as _socket
+        from app.devices.connectivity import _classify_tcp_error
+        msg = _classify_tcp_error(_socket.gaierror("name error"),
+                                  "bad-host", 22)
+        check("gaierror -> DNS-текст",
+              "разрешить адрес" in msg, f"got {msg!r}")
+        msg = _classify_tcp_error(ConnectionRefusedError(), "h", 22)
+        check("refused -> отклонено",
+              "отклонено" in msg, f"got {msg!r}")
+        msg = _classify_tcp_error(_socket.timeout(), "h", 22)
+        check("timeout -> таймаут-текст",
+              "таймаут" in msg, f"got {msg!r}")
 
     print()
     print(f"Итог: PASS={PASS} FAIL={FAIL}")

@@ -55,6 +55,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.models import Device, DeviceType, Role, User  # noqa: E402
+import app.devices.connectivity as conn_mod  # noqa: E402
+
+# Этап 20: POST-создание делает блокирующую проверку подключения —
+# на тестовых host реальная сеть недоступна, подменяем на «всегда ок»
+conn_mod.check_device_connectivity = lambda **kw: (True, "мок проверки")
 
 PASS, FAIL = 0, 0
 

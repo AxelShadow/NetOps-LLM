@@ -1,0 +1,46 @@
+{# HTMX-фрагмент: форма параметров агента (Этап 20).
+   Ожидает: agent_ctx (str), agent_steps (str), saved (bool), error (str|None).
+   Значения — runtime-настройки app_settings, перекрывающие env-дефолты;
+   применяются к новому сообщению без перезапуска сервера. #}
+<div id="agent-settings" class="bg-white rounded-xl shadow-sm p-4 mb-4">
+    <h2 class="text-base font-bold mb-1">Параметры агента</h2>
+    <p class="text-xs text-slate-500 mb-3">
+        Применяются к новому сообщению без перезапуска. Дефолты задаются
+        переменными окружения (NETOPS_AGENT_CONTEXT_CHARS,
+        NETOPS_AGENT_MAX_STEPS).
+    </p>
+    {% if saved %}
+    <div class="mb-3 px-4 py-2.5 rounded-md bg-emerald-50 border border-emerald-200 text-sm text-emerald-800">
+        Настройки агента сохранены
+    </div>
+    {% endif %}
+    {% if error %}
+    <div class="mb-3 px-4 py-2.5 rounded-md bg-red-50 border border-red-200 text-sm text-red-800">{{ error }}</div>
+    {% endif %}
+    <form hx-post="/admin/settings/agent" hx-target="#agent-settings" hx-swap="outerHTML"
+          class="grid gap-3 md:grid-cols-3 items-end">
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="a-ctx">Бюджет контекста, символов</label>
+            <input id="a-ctx" name="agent_context_chars" type="number"
+                   min="10000" max="200000" step="1000" required
+                   value="{{ agent_ctx }}"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="a-steps">Лимит шагов агента</label>
+            <input id="a-steps" name="agent_max_steps" type="number"
+                   min="1" max="50" required
+                   value="{{ agent_steps }}"
+                   class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+        </div>
+        <button type="submit"
+                class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">
+            Сохранить
+        </button>
+    </form>
+    <p class="text-xs text-slate-400 mt-2">
+        Бюджет контекста: история диалога старее бюджета отбрасывается
+        (по символам), лимит шагов: максимум вызовов инструментов на одно
+        сообщение. Диапазоны: контекст 10000–200000, шаги 1–50.
+    </p>
+</div>

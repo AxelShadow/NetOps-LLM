@@ -76,6 +76,8 @@ SUITES: list[tuple[str, Path, Path, list[str], str]] = [
     ("tests/test_snmp_tools.py (Этап SNMP)",      BE_PY, BACKEND_DIR, ["tests/test_snmp_tools.py"],              "tests/test_snmp_tools.py"),
     ("tests/test_printers_report.py (Этап 19)",  BE_PY, BACKEND_DIR, ["tests/test_printers_report.py"],          "tests/test_printers_report.py"),
     ("tests/test_printer_discovery.py (Этап 19)", BE_PY, BACKEND_DIR, ["tests/test_printer_discovery.py"],       "tests/test_printer_discovery.py"),
+    ("tests/test_printers_pages_report.py (Этап 20)", BE_PY, BACKEND_DIR, ["tests/test_printers_pages_report.py"], "tests/test_printers_pages_report.py"),
+    ("tests/test_agent_settings.py (Этап 20)",  BE_PY, BACKEND_DIR, ["tests/test_agent_settings.py"],           "tests/test_agent_settings.py"),
     # --- chainlit: интерпретатор chainlit/.venv, cwd chainlit/ ---
     ("sse_parser_test.py",                   CL_PY, CHAINLIT_DIR, ["sse_parser_test.py"],                         "sse_parser_test.py"),
     ("dev_sse/scenarios_test.py",            CL_PY, CHAINLIT_DIR, ["dev_sse/scenarios_test.py"],                   "dev_sse/scenarios_test.py"),

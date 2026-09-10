@@ -1,6 +1,9 @@
 {# HTMX-фрагмент: самостоятельная модалка с формой устройства.
    Ожидает: device (Device|None), action, method ("post"|"put"),
-             error (str|None), device_types (список строк).
+             error (str|None), device_types (список строк), значения
+             полей (name/host/port/.../proto_ssh/proto_snmp — Этап 20:
+             при неудачном сабмите форма перерисовывается с введёнными
+             значениями, чтобы не набирать заново).
    Для zabbix-устройства форма read-only, кроме enabled. #}
 <div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:1rem"
      onclick="if(event.target===this)this.remove()">
@@ -29,10 +32,11 @@
               hx-target="#inventory-table"
               hx-swap="outerHTML"
               hx-on::after-request="if(event.detail.successful)document.getElementById('inventory-modal').innerHTML=''"
+              hx-on::response-error="document.getElementById('inventory-modal').innerHTML=event.detail.xhr.responseText"
               class="grid gap-3">
             <div>
                 <label class="block text-xs font-medium text-slate-500 mb-1" for="d-name">Имя *</label>
-                <input id="d-name" name="name" type="text" required value="{{ device.name if device else '' }}"
+                <input id="d-name" name="name" type="text" required value="{{ name }}"
                        {% if device and device.source == "zabbix" %}disabled{% endif %}
                        class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
             </div>
@@ -43,27 +47,50 @@
                             {% if device and device.source == "zabbix" %}disabled{% endif %}
                             class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
                         {% for t in device_types %}
-                        <option value="{{ t }}" {% if device and device.type.value == t %}selected{% endif %}>{{ t }}</option>
+                        <option value="{{ t }}" {% if type == t %}selected{% endif %}>{{ t }}</option>
                         {% endfor %}
                     </select>
                 </div>
                 <div>
                     <label class="block text-xs font-medium text-slate-500 mb-1" for="d-port">Порт</label>
-                    <input id="d-port" name="port" type="number" min="0" max="65535" value="{{ device.port if device else 22 }}"
+                    <input id="d-port" name="port" type="number" min="0" max="65535" value="{{ port if port else 22 }}"
                            {% if device and device.source == "zabbix" %}disabled{% endif %}
                            class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
                 </div>
             </div>
             <div>
                 <label class="block text-xs font-medium text-slate-500 mb-1" for="d-host">Адрес (host) *</label>
-                <input id="d-host" name="host" type="text" required value="{{ device.host if device else '' }}"
+                <input id="d-host" name="host" type="text" required value="{{ host }}"
                        {% if device and device.source == "zabbix" %}disabled{% endif %}
                        class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+            </div>
+            {# Протоколы подключения (Этап 20): два чекбокса; для vmware/esxi
+               оба снимают (управление через vSphere API, не ssh/snmp).
+               Хранится строкой "ssh,snmp" / "ssh" / "snmp" / "". #}
+            <div>
+                <span class="block text-xs font-medium text-slate-500 mb-1">Протокол подключения</span>
+                <div class="flex gap-4">
+                    <label class="flex items-center gap-2 text-sm text-slate-700">
+                        <input type="checkbox" name="proto_ssh" value="on"
+                               {% if proto_ssh %}checked{% endif %}
+                               {% if device and device.source == "zabbix" %}disabled{% endif %}
+                               class="rounded border-slate-300">
+                        SSH
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-slate-700">
+                        <input type="checkbox" name="proto_snmp" value="on"
+                               {% if proto_snmp %}checked{% endif %}
+                               {% if device and device.source == "zabbix" %}disabled{% endif %}
+                               class="rounded border-slate-300">
+                        SNMP
+                    </label>
+                    <span class="text-xs text-slate-400 self-center">пусто — если vmware/esxi</span>
+                </div>
             </div>
             <div class="grid grid-cols-2 gap-3">
                 <div>
                     <label class="block text-xs font-medium text-slate-500 mb-1" for="d-username">Логин</label>
-                    <input id="d-username" name="username" type="text" value="{{ device.username if device else '' }}"
+                    <input id="d-username" name="username" type="text" value="{{ username }}"
                            {% if device and device.source == "zabbix" %}disabled{% endif %}
                            class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
                 </div>
@@ -89,7 +116,7 @@
                 <div>
                     <label class="block text-xs font-medium text-slate-500 mb-1" for="d-snmp-community">SNMP: community</label>
                     <input id="d-snmp-community" name="snmp_community" type="text"
-                           value="{{ device.snmp_community if device else '' }}" placeholder="public"
+                           value="{{ snmp_community }}" placeholder="public"
                            {% if device and device.source == "zabbix" %}disabled{% endif %}
                            class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
                 </div>
@@ -97,14 +124,14 @@
             <div class="grid grid-cols-2 gap-3">
                 <div>
                     <label class="block text-xs font-medium text-slate-500 mb-1" for="d-group">Группа</label>
-                    <input id="d-group" name="group" type="text" value="{{ device.group if device else '' }}"
+                    <input id="d-group" name="group" type="text" value="{{ group }}"
                            {% if device and device.source == "zabbix" %}disabled{% endif %}
                            class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
                 </div>
                 <div class="flex items-end">
                     <label class="flex items-center gap-2 text-sm text-slate-700">
                         <input type="checkbox" name="enabled" value="on"
-                               {% if not device or device.enabled %}checked{% endif %}
+                               {% if enabled %}checked{% endif %}
                                class="rounded border-slate-300">
                         Включено
                     </label>
@@ -112,7 +139,7 @@
             </div>
             <div>
                 <label class="block text-xs font-medium text-slate-500 mb-1" for="d-description">Описание</label>
-                <input id="d-description" name="description" type="text" value="{{ device.description if device else '' }}"
+                <input id="d-description" name="description" type="text" value="{{ description }}"
                        {% if device and device.source == "zabbix" %}disabled{% endif %}
                        class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
             </div>
@@ -122,7 +149,7 @@
                         onclick="document.getElementById('inventory-modal').innerHTML=''; return false;">Отмена</button>
                 <button type="submit"
                         class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">
-                    Сохранить
+                    {% if device %}Сохранить{% else %}Добавить{% endif %}
                 </button>
             </div>
         </form>

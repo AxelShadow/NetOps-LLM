@@ -182,31 +182,53 @@ def sync_printer_discovery(db: Session, *, subnets: str,
     snmp_existing = {d.host: d for d in db.query(Device).filter(
         Device.source == "snmp",
         Device.type == DeviceType.printer).all()}
+    snmp_by_mac = {d.mac: d for d in snmp_existing.values() if d.mac}
     taken_names = {d.name: d.id for d in db.query(Device).all()}
     added = updated = skipped = 0
 
     for p in disc["found"]:
         ip = p["ip"]
         sys_descr = p["sys_descr"] or ""
-        existing = snmp_existing.get(ip)
+        mac = p.get("mac")
+        dns_name = p.get("dns_name") or ""
+        existing = snmp_existing.get(ip) or (snmp_by_mac.get(mac)
+                                             if mac else None)
         if existing is not None:
-            # Найдено прошлым discovery: обновляем (имя в инвентаре
-            # НЕ трогаем — его мог переименовать пользователь).
+            # Найдено прошлым discovery (по IP или MAC — DHCP сменил
+            # адрес). Перенос на новый IP только если адрес свободен:
+            # чужое устройство с этим host не затираем.
+            if existing.host != ip:
+                occupant = db.query(Device).filter(
+                    Device.host == ip,
+                    Device.id != existing.id).first()
+                if occupant is not None:
+                    skipped += 1   # новый IP занят чужим устройством
+                    continue
+                snmp_existing.pop(existing.host, None)
+                existing.host = ip
+                snmp_existing[ip] = existing
+            # Имя в инвентаре НЕ трогаем — его мог переименовать
+            # пользователь.
             existing.snmp_community = community
             existing.description = f"SNMP: {sys_descr[:100]}"
+            existing.mac = mac or existing.mac
+            existing.dns_name = dns_name
             updated += 1
             continue
-        if db.query(Device).filter(Device.host == ip).first() is not None:
-            skipped += 1     # другой источник/тип с этим host — не дублируем
+        if (db.query(Device).filter(Device.host == ip).first() is not None
+                or (mac and db.query(Device).filter(
+                    Device.mac == mac).first() is not None)):
+            skipped += 1   # чужой host или MAC — не дублируем
             continue
-        name = _norm_name(p["sys_name"] or f"printer-{ip}")
+        name = _norm_name(p["sys_name"] or dns_name or f"printer-{ip}")
         if name in taken_names:
             name = f"{name}-{ip}"
         db.add(Device(
             type=DeviceType.printer, enabled=False,
             host=ip, port=port, group="Принтеры", source="snmp",
             snmp_version="2c", snmp_community=community,
-            name=name, description=f"SNMP: {sys_descr[:100]}"))
+            name=name, mac=mac, dns_name=dns_name,
+            description=f"SNMP: {sys_descr[:100]}"))
         taken_names[name] = -1
         added += 1
 

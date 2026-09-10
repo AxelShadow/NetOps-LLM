@@ -39,6 +39,11 @@ os.environ["NETOPS_ZABBIX_URL"] = ""     # перекрывает backend/.env (
 os.environ["NETOPS_ZABBIX_TOKEN"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
+
+import app.devices.connectivity as conn_mod  # noqa: E402
+# Этап 20: POST-создание делает блокирующую проверку подключения —
+# на тестовых host реальная сеть недоступна, подменяем на «всегда ок»
+conn_mod.check_device_connectivity = lambda **kw: (True, "мок проверки")
 from sqlalchemy import create_engine, text  # noqa: E402
 
 from app.main import _ensure_device_columns  # noqa: E402
@@ -72,6 +77,9 @@ def scenario_fresh_db():
     check("свежая БД: колонки snmp_version/snmp_community существуют",
           {"snmp_version", "snmp_community"} <= cols,
           f"cols={sorted(cols)}")
+    check("свежая БД: колонки protocol/mac/dns_name существуют (Этап 20)",
+          {"protocol", "mac", "dns_name"} <= cols,
+          f"cols={sorted(cols)}")
     with engine.connect() as conn:
         conn.execute(text(
             "INSERT INTO devices (name, type, host, port, username, "
@@ -82,8 +90,13 @@ def scenario_fresh_db():
         ver, comm = conn.execute(text(
             "SELECT snmp_version, snmp_community FROM devices "
             "WHERE name = 'fresh-rtr'")).fetchone()
+        proto = conn.execute(text(
+            "SELECT protocol FROM devices WHERE name = 'fresh-rtr'"
+        )).scalar()
     check("свежая БД: raw-INSERT без SNMP-полей получает дефолты 2c/public",
           ver == "2c" and comm == "public", f"got {ver}/{comm}")
+    check("свежая БД: raw-INSERT без protocol -> '' (не задано)",
+          proto == "", f"got {proto!r}")
 
 
 def scenario_idempotent():
@@ -124,15 +137,17 @@ def scenario_old_db():
             "'secret', 1, 'Ядро сети', 'manual', 'Сеть')"))
         conn.commit()
     before = _columns(old)
-    check("старая БД: колонок snmp_* нет до миграции",
-          not {"snmp_version", "snmp_community"} & before,
+    check("старая БД: колонок snmp_* / Этапа 20 нет до миграции",
+          not ({"snmp_version", "snmp_community"}
+               | {"protocol", "mac", "dns_name"}) & before,
           f"cols={sorted(before)}")
 
     _ensure_device_columns(old)     # eng-параметр для отдельного движка
 
     after = _columns(old)
-    check("старая БД: миграция добавила snmp_version/snmp_community",
-          {"snmp_version", "snmp_community"} <= after,
+    check("старая БД: миграция добавила snmp + protocol/mac/dns_name",
+          ({"snmp_version", "snmp_community"}
+           | {"protocol", "mac", "dns_name"}) <= after,
           f"cols={sorted(after)}")
     with old.connect() as conn:
         name, ver, comm = conn.execute(text(
@@ -166,8 +181,15 @@ def scenario_crud_form():
               r.status_code == 200 and 'name="snmp_version"' in r.text
               and 'name="snmp_community"' in r.text,
               f"got {r.status_code}")
-        check("GET-форма: тип printer в select",
-              'value="printer"' in r.text, "")
+        check("GET-форма: чекбоксы протокола SSH/SNMP (Этап 20)",
+              'name="proto_ssh"' in r.text and 'name="proto_snmp"' in r.text,
+              "")
+        check("GET-форма: кнопка «Добавить» для нового устройства",
+              "Добавить" in r.text and "Сохранить" not in r.text,
+              "нет «Добавить» или есть «Сохранить»")
+        check("GET-форма: типы printer/aruba/edgecore в select",
+              'value="printer"' in r.text and 'value="aruba"' in r.text
+              and 'value="edgecore"' in r.text, "")
 
         # POST: принтер с кастомным community
         r = client.post("/admin/inventory",
@@ -216,13 +238,65 @@ def scenario_crud_form():
                   d2 is not None and d2.snmp_version == "2c"
                   and d2.snmp_community == "public",
                   f"got {d2 and (d2.snmp_version, d2.snmp_community)}")
+            check("POST без чекбоксов протокола -> protocol='' ",
+                  d2 is not None and d2.protocol == "",
+                  f"got {d2 and d2.protocol!r}")
+
+        # POST: aruba с обоими протоколами (Этап 20)
+        r = client.post("/admin/inventory",
+                        data={"name": "aruba-sw-1", "type": "aruba",
+                              "host": "10.9.9.9", "port": "22",
+                              "proto_ssh": "on", "proto_snmp": "on",
+                              "snmp_community": "aruba-sec"})
+        with SessionLocal() as db:
+            d3 = db.query(Device).filter_by(name="aruba-sw-1").first()
+            check("POST aruba ssh+snmp -> protocol='ssh,snmp'",
+                  d3 is not None and d3.type == DeviceType.aruba
+                  and d3.protocol == "ssh,snmp",
+                  f"got {d3 and (d3.type, d3.protocol)}")
+
+        # PUT: снять ssh, оставить snmp
+        r = client.put(f"/admin/inventory/{d3.id}",
+                       data={"name": "aruba-sw-1", "type": "aruba",
+                             "host": "10.9.9.9", "port": "22",
+                             "proto_snmp": "on",
+                             "snmp_community": "aruba-sec"})
+        with SessionLocal() as db:
+            d3u = db.query(Device).filter_by(name="aruba-sw-1").first()
+            check("PUT aruba: только snmp -> protocol='snmp'",
+                  d3u is not None and d3u.protocol == "snmp",
+                  f"got {d3u and d3u.protocol!r}")
+
+        # Этап 20 (регресс): неудачный PUT (имя занято) при СНЯТЫХ
+        # чекбоксах протоколов и «Включено» — форма должна отражать
+        # сабмит пользователя, а НЕ восстанавливать из БД
+        r = client.put(f"/admin/inventory/{d3.id}",
+                       data={"name": "hq-printer-1",   # занято
+                             "type": "aruba", "host": "10.9.9.9",
+                             "port": "22",
+                             "snmp_community": "aruba-sec"})
+        html = r.text
+        ssh_seg = html.split('name="proto_ssh"')[1][:120]
+        snmp_seg = html.split('name="proto_snmp"')[1][:120]
+        en_seg = html.split('name="enabled"')[1][:200]
+        check("неудачный PUT: 400 + текст ошибки в форме",
+              r.status_code == 400 and "уже занято" in html,
+              f"got {r.status_code}")
+        check("снятые протоколы НЕ восстанавливаются из БД (regress)",
+              "checked" not in ssh_seg and "checked" not in snmp_seg,
+              f"ssh={'checked' in ssh_seg} snmp={'checked' in snmp_seg}")
+        check("снятое «Включено» НЕ восстанавливается из БД (regress)",
+              "checked" not in en_seg,
+              f"enabled={'checked' in en_seg}")
+        check("текстовые поля сохранены (host)",
+              'value="10.9.9.9"' in html, "")
 
 
 def scenario_router_types():
-    """5) DeviceType.printer есть в _INV_DEVICE_TYPES роутера админки."""
+    """5) DeviceType.printer/aruba/edgecore есть в _INV_DEVICE_TYPES."""
     from app.ui.router import _INV_DEVICE_TYPES
-    check("DeviceType.printer в _INV_DEVICE_TYPES",
-          "printer" in _INV_DEVICE_TYPES,
+    check("DeviceType.printer/aruba/edgecore в _INV_DEVICE_TYPES",
+          {"printer", "aruba", "edgecore"} <= set(_INV_DEVICE_TYPES),
           f"types={_INV_DEVICE_TYPES}")
 
 

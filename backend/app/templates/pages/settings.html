@@ -58,6 +58,13 @@
     </div>
 </div>
 
+{# --- Секция: параметры агента (редактируемые, Этап 20) --- #}
+{# HTMX подгружает форму отдельным GET-запросом (как таблицу инвентаря):
+   фрагмент самодостаточен, страница не собирает его контекст #}
+<div hx-get="/admin/settings/partial/agent" hx-trigger="load" hx-swap="innerHTML">
+    <div class="bg-white rounded-xl shadow-sm p-8 text-center text-slate-400">Загрузка…</div>
+</div>
+
 {# --- Секция: параметры конфигурации (только чтение) --- #}
 <div class="grid gap-4 md:grid-cols-2">
     <div class="bg-white rounded-xl shadow-sm p-4">

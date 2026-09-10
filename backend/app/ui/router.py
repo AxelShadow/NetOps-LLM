@@ -216,8 +216,11 @@ def _settings_view(s) -> dict:
     Значения берутся из переменных окружения (app/config.py) и меняются
     только перезапуском с новым окружением — потому страница read-only.
     Секреты (jwt_secret, llm_api_key, zabbix_token, пароли) не показываем.
+    Исключение (Этап 20): параметры агента (бюджет контекста, лимит
+    шагов) — runtime-настройки app_settings, редактируются ниже.
     """
-    from ..api.chat import MAX_AGENT_STEPS
+    from ..api.chat import _agent_settings
+    ctx, steps = _agent_settings()
     return {
         "general": [
             ("Версия приложения", _app_version()),
@@ -225,7 +228,8 @@ def _settings_view(s) -> dict:
             ("Мок-режим", "вкл" if s.mock_mode else "выкл"),
             ("Авто-регистрация пользователей", "вкл" if s.auto_register_users else "выкл"),
             ("Сообщений истории в контексте", s.history_messages),
-            ("Лимит шагов агента", MAX_AGENT_STEPS),
+            ("Бюджет контекста агента, симв.", ctx),
+            ("Лимит шагов агента", steps),
         ],
         "llm": [
             ("URL", s.llm_base_url),
@@ -331,6 +335,79 @@ async def settings_check_vmware(request: Request,
         return _check_tpl(request, user, False, "Недоступно",
                           "%s: %s: %s" % (device.name, type(e).__name__,
                                           str(e)[:200]))
+
+
+# --- Настройки агента: runtime-значения app_settings (Этап 20) ----------------
+
+@router.get("/settings/partial/agent")
+async def settings_agent_partial(
+        request: Request,
+        user: User = Depends(require_roles_page(Role.admin))):
+    """Форма параметров агента с текущими эффективными значениями."""
+    from ..api.chat import _agent_settings
+    ctx, steps = _agent_settings()
+    return templates.TemplateResponse(
+        request, "components/settings/agent_form.html",
+        _ctx(request, user, agent_ctx=str(ctx), agent_steps=str(steps),
+             saved=False, error=None))
+
+
+@router.post("/settings/agent")
+async def settings_agent_save(
+        request: Request,
+        db: Session = Depends(get_db),
+        user: User = Depends(require_roles_page(Role.admin))):
+    """Сохранение параметров агента (бюджет контекста, лимит шагов).
+
+    Успех -> HTMX-свап секции формы с зелёным flash; ошибка
+    валидации -> тот же фрагмент с красной инлайн-ошибкой (статус 200:
+    htmx 2.x не свапает 4xx — см. форму устройства).
+    """
+    from ..models import AppSetting
+    from ..api.chat import (AGENT_CONTEXT_MIN, AGENT_CONTEXT_MAX,
+                            AGENT_STEPS_MIN, AGENT_STEPS_MAX)
+
+    form = dict(await request.form())
+    error = None
+    ctx = form.get("agent_context_chars", "").strip()
+    steps = form.get("agent_max_steps", "").strip()
+    try:
+        ctx_val = int(ctx)
+        if not (AGENT_CONTEXT_MIN <= ctx_val <= AGENT_CONTEXT_MAX):
+            error = (f"Бюджет контекста: число {AGENT_CONTEXT_MIN}–"
+                     f"{AGENT_CONTEXT_MAX} символов")
+    except ValueError:
+        error = f"Бюджет контекста: укажите число ({AGENT_CONTEXT_MIN}–{AGENT_CONTEXT_MAX})"
+    if error is None:
+        try:
+            steps_val = int(steps)
+            if not (AGENT_STEPS_MIN <= steps_val <= AGENT_STEPS_MAX):
+                error = f"Лимит шагов: число {AGENT_STEPS_MIN}–{AGENT_STEPS_MAX}"
+        except ValueError:
+            error = (f"Лимит шагов: укажите число "
+                     f"({AGENT_STEPS_MIN}–{AGENT_STEPS_MAX})")
+    if error is None:
+        try:
+            for key, value in (("agent_context_chars", str(ctx_val)),
+                               ("agent_max_steps", str(steps_val))):
+                row = db.get(AppSetting, key)
+                if row is None:
+                    db.add(AppSetting(key=key, value=value))
+                else:
+                    row.value = value
+                    row.updated_at = datetime.now()
+            db.commit()
+        except Exception:
+            db.rollback()
+            log.exception("Не удалось сохранить настройки агента")
+            error = "Не удалось сохранить (ошибка БД)"
+    return templates.TemplateResponse(
+        request, "components/settings/agent_form.html",
+        _ctx(request, user,
+             agent_ctx=(str(ctx_val) if error is None else ctx),
+             agent_steps=(str(steps_val) if error is None else steps),
+             saved=(error is None and "agent_context_chars" in form),
+             error=error))
 
 
 # --- Аудит: HTMX-фрагменты (Фаза 4 миграции) -------------------------------
@@ -834,15 +911,47 @@ def _inv_rows(request: Request, user: User, db: Session, flash: str | None = Non
 
 
 def _inv_form(request: Request, user: User, device: Device | None,
-              error: str | None = None, status_code: int = 200):
-    """Фрагмент формы добавления/редактирования (модалка)."""
+              error: str | None = None, status_code: int = 200,
+              form: dict | None = None):
+    """Фрагмент формы добавления/редактирования (модалка).
+
+    form — данные НЕудачного сабмита (Этап 20): поля перезаполняются
+    введёнными значениями, чтобы ошибка проверки/валидации не
+    заставляла набирать форму заново. Приоритет: form (неудачный
+    сабмит) ?? device (edit) ?? пусто.
+    """
     action = "/admin/inventory" if device is None \
         else f"/admin/inventory/{device.id}"
     method = "post" if device is None else "put"
+    # Значения полей: form (неудачный сабмит) ?? device (edit) ?? ''
+    f = form or {}
+    vals = {
+        "name": f.get("name", device.name if device else ""),
+        "host": f.get("host", device.host if device else ""),
+        "port": f.get("port", (device.port if device else "") or ""),
+        "username": f.get("username", device.username if device else ""),
+        "snmp_community": f.get("snmp_community",
+                                 (device.snmp_community if device
+                                  else "") or ""),
+        "group": f.get("group", device.group if device else ""),
+        "description": f.get("description",
+                             device.description if device else ""),
+        "type": f.get("type", device.type.value if device else ""),
+        # Чекбоксы: снятый НЕ попадает в form-data, поэтому при
+        # неудачном сабмите (form) решение только по form — иначе
+        # снятый пользователем чекбокс молча вернётся из device
+        "proto_ssh": (f.get("proto_ssh") == "on" if form
+                      else "ssh" in (device.protocol if device else "")),
+        "proto_snmp": (f.get("proto_snmp") == "on" if form
+                       else "snmp" in (device.protocol if device else "")),
+        # тот же принцип для «Включено»: при form — решение пользователя
+        "enabled": (f.get("enabled") == "on" if form
+                    else (device.enabled if device else True)),
+    }
     return templates.TemplateResponse(
         request, "components/inventory/form.html",
         _ctx(request, user, device=device, action=action, method=method,
-             error=error, device_types=_INV_DEVICE_TYPES),
+             error=error, device_types=_INV_DEVICE_TYPES, **vals),
         status_code=status_code)
 
 
@@ -912,6 +1021,14 @@ def _inv_upsert(db: Session, data: dict, existing: Device | None) -> Device:
     # SNMP-поля (этап SNMP): пустые значения = дефолты; версия пока одна (2c)
     d.snmp_version = (data.get("snmp_version") or "").strip() or "2c"
     d.snmp_community = (data.get("snmp_community") or "").strip() or "public"
+    # Протоколы подключения (Этап 20): два чекбокса -> "ssh,snmp"/"ssh"/
+    # "snmp"/"" (пусто = не задано, напр. vmware/esxi)
+    protos = []
+    if data.get("proto_ssh") == "on":
+        protos.append("ssh")
+    if data.get("proto_snmp") == "on":
+        protos.append("snmp")
+    d.protocol = ",".join(protos)
     if existing is None:
         db.add(d)
     db.commit()
@@ -935,12 +1052,37 @@ async def inventory_create(request: Request,
                       db: Session = Depends(get_db),
                       user: User = Depends(require_roles_page(Role.admin))):
     data = dict(await request.form())
+
+    # Блокирующая проверка подключения (Этап 20): ДО записи в БД,
+    # по сырым полям формы. Сетевые вызовы — в to_thread (snmp_get
+    # внутри делает asyncio.run, из async-контекста нельзя).
+    protos = []
+    if data.get("proto_ssh") == "on":
+        protos.append("ssh")
+    if data.get("proto_snmp") == "on":
+        protos.append("snmp")
+    try:
+        port_val = int(data.get("port") or 0)
+    except ValueError:
+        port_val = 0
+    from ..devices.connectivity import check_device_connectivity
+    ok, message = await asyncio.to_thread(
+        check_device_connectivity,
+        host=(data.get("host") or "").strip(),
+        protocol=",".join(protos),
+        device_type=data.get("type", ""),
+        port=port_val,
+        snmp_community=(data.get("snmp_community") or "").strip() or "public")
+    if not ok:
+        return _inv_form(request, user, device=None, error=message,
+                         status_code=400, form=data)
+
     try:
         _inv_upsert(db, data, existing=None)
     except HTTPException as e:
-        # форма вернётся с текстом ошибки поверх модалки
-        return _inv_form(request, user, device=None,
-                        error=e.detail, status_code=e.status_code)
+        # форма вернётся с введёнными значениями и текстом ошибки
+        return _inv_form(request, user, device=None, error=e.detail,
+                         status_code=e.status_code, form=data)
     # FIX-03: новый vCenter не должен вечно жить со stale-кэшем,
     # оставшимся от прежних подключений
     _invalidate_vmware_cache()
@@ -1019,7 +1161,8 @@ async def inventory_update(device_id: int, request: Request,
         # Zabbix-устройствам можно менять только enabled (как в /api/devices)
         return _inv_form(request, user, device=d,
                          error="Устройства из Zabbix: можно менять только "
-                               "включение/выключение", status_code=400)
+                               "включение/выключение", status_code=400,
+                         form=data)
     if d.source == "zabbix" and not data.get("name"):
         # Быстрый переключатель из таблицы: только enabled
         d.enabled = data.get("enabled") == "on"
@@ -1031,7 +1174,8 @@ async def inventory_update(device_id: int, request: Request,
         _inv_upsert(db, data, existing=d)
     except HTTPException as e:
         return _inv_form(request, user, device=d,
-                         error=e.detail, status_code=e.status_code)
+                         error=e.detail, status_code=e.status_code,
+                         form=data)
     # FIX-03: изменились креды/адрес vCenter — прежняя сессия недействительна
     _invalidate_vmware_cache()
     return _inv_rows(request, user, db, page=1, q_f=None, type_f=None,

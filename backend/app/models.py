@@ -66,6 +66,8 @@ class DeviceType(str, enum.Enum):
     mikrotik = "mikrotik"
     usergate = "usergate"
     printer = "printer"       # этап SNMP: сетевые принтеры (только SNMP)
+    aruba = "aruba"           # Этап 20: HPE Aruba (ssh+snmp)
+    edgecore = "edgecore"     # Этап 20: EdgeCore (ssh+snmp)
     vcenter = "vcenter"
     esxi = "esxi"
     other = "other"
@@ -95,6 +97,13 @@ class Device(Base):
         String(4), default="2c", server_default="2c")
     snmp_community: Mapped[str] = mapped_column(
         String(64), default="public", server_default="public")
+    # Этап 20: протоколы подключения ("ssh,snmp"/"ssh"/"snmp"/""),
+    # MAC (discovery-дедуп) и DNS-имя (discovery)
+    protocol: Mapped[str] = mapped_column(
+        String(16), default="", server_default="")
+    mac: Mapped[str | None] = mapped_column(String(17), nullable=True)
+    dns_name: Mapped[str] = mapped_column(
+        String(128), default="", server_default="")
 
 
 class AuditLog(Base):
@@ -111,3 +120,17 @@ class AuditLog(Base):
     result: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16))     # ok | error | denied
     duration_ms: Mapped[int | None] = mapped_column(Integer)  # длительность вызова
+
+
+class AppSetting(Base):
+    """Runtime-настройки приложения (Этап 20): редактируются из админки.
+
+    Ключ -> строковое значение; дефолты и валидация — в точках
+    использования (config.py env-дефолты, chat.py диапазоны).
+    """
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(128), default="")
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, default=lambda: dt.datetime.now(dt.UTC))

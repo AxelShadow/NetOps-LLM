@@ -409,6 +409,37 @@ def mock_get_printers_report(args: dict) -> tuple[str, str]:
     })
 
 
+def mock_get_printers_pages_report(args: dict) -> tuple[str, str]:
+    """Отчёт по страницам (Этап 20): моно + цветной (CMYK) + недоступный."""
+    return _json({
+        "summary": {"total": 3, "reachable": 2, "unreachable": 1,
+                    "mono": 1, "color": 1, "total_pages": 13322},
+        "printers": [
+            {"name": "hq-printer-1", "host": "192.0.2.150",
+             "pages_printed": 12345, "color": False, "toner_percent": 42.0,
+             "cartridges": []},
+            {"name": "color-printer-2", "host": "192.0.2.151",
+             "pages_printed": 977, "color": True, "toner_percent": 55.0,
+             "cartridges": [
+                 {"supply": "1", "role": "black", "percent": 42.0},
+                 {"supply": "2", "role": "color", "percent": 55.0},
+                 {"supply": "3", "role": "color", "percent": 61.0},
+                 {"supply": "4", "role": "color", "percent": 58.0},
+             ]},
+        ],
+        "remaining": [],
+        "unreachable": [
+            {"name": "storage-printer-3", "error":
+             "SnmpError: WALK 192.0.2.152: No SNMP response received "
+             "before timeout"},
+        ],
+        "note": "Суммарно и по каждому принтеру. Счётчиков страниц "
+                "по цветам вендоры не отдают: цветные помечены "
+                "признаком color и картриджами (уровни %). Подробности "
+                "по одному принтеру — printer_info.",
+    })
+
+
 # Словарь: имя инструмента -> мок-функция (args: dict) -> (json-строка, status)
 MOCK_TOOLS = {
     "ping": mock_ping,
@@ -431,4 +462,5 @@ MOCK_TOOLS = {
     "get_device_full_health": mock_get_device_full_health,
     "get_infrastructure_health": mock_get_infrastructure_health,
     "get_printers_report": mock_get_printers_report,
+    "get_printers_pages_report": mock_get_printers_pages_report,
 }

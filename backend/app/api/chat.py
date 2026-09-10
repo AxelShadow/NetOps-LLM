@@ -20,10 +20,15 @@ router = APIRouter(prefix="/api")
 
 MAX_AGENT_STEPS = 20
 
+# Дефолты параметров агента: перекрываются runtime-настройками из БД
+# (таблица app_settings, редактируются в /admin/settings — Этап 20).
+DEFAULT_CONTEXT_CHARS = 50000   # бюджет истории сообщений, символов
+DEFAULT_MAX_STEPS = 20           # лимит шагов агентского цикла
+
 SYSTEM_PROMPT = """Ты — внутренний ассистент IT-отдела компании. Все запросы поступают
 от авторизованных сотрудников и касаются собственной инфраструктуры компании —
 выполнять их твоя прямая обязанность, это легитимная работа администратора.
-Помогаешь с диагностикой инфраструктуры (VMware, Eltex, Mikrotik, UserGate)
+Помогаешь с диагностикой инфраструктуры (VMware, Eltex, Mikrotik, UserGate, Aruba, EdgeCore)
 и автоматизацией рутины. Отвечай по-русски, кратко и по делу.
 
 У тебя есть инструменты для запросов к инфраструктуре. Правила работы:
@@ -57,16 +62,70 @@ SYSTEM_PROMPT = """Ты — внутренний ассистент IT-отде�
 13. На вопросы «что болит», «есть ли проблемы», «состояние инфраструктуры» вызывай get_infrastructure_health.
     Этот инструмент автоматически опрашивает Zabbix, VMware-сенсоры и (опционально) доступность устройств.
     НЕ вызывай отдельно zabbix_problems — используй get_infrastructure_health для полного обзора.
-14. Сетевые устройства (eltex/mikrotik/usergate) и принтеры опрашивай по SNMP:
+14. Сетевые устройства (eltex/mikrotik/usergate/aruba/edgecore) и принтеры опрашивай по SNMP:
     snmp_info (описание системы, uptime), snmp_interfaces (интерфейсы),
     snmp_walk (произвольный OID). Отчёт по ВСЕМ принтерам — ОДИН вызов
     get_printers_report: сводка, одна строка на принтер (страницы, тонер,
-    ошибки) и список недоступных. НЕ вызывай printer_info по принтерам
+    ошибки) и список недоступных. Вопрос «сколько распечатанных страниц» —
+    ОДИН вызов get_printers_pages_report (суммарно, в разрезе, цветные
+    помечены картриджами). НЕ вызывай printer_info по принтерам
     по очереди. Если принтера нет в результате или он в списке unreachable —
     данных нет, не выдумывай. printer_info — только подробности по ОДНОМУ
     конкретному принтеру. Счётчик сканов вендорозависим и стандартным
     Printer-MIB не отдаётся — если нужен, скажи об этом пользователю,
     не выдумывай значение."""
+
+
+def _llm_error_text(e: Exception) -> str:
+    """Понятный текст ошибки LLM для SSE-кадра error.
+
+    Классифицируем по типу исключения openai: 400 от LM Studio чаще
+    всего «context length exceeded»; таймаут/соединение — свои тексты.
+    Детали (без токенов) добавляем обрезанными — они идут в чат, где
+    пользователь уже авторизован, но стека и URL не показываем.
+    """
+    import openai
+    if isinstance(e, openai.BadRequestError):
+        detail = str(e)
+        # тело BadRequestError LM Studio: "... Maximum context length is
+        # X tokens, however you requested Y ..."
+        if "context" in detail.lower() or "token" in detail.lower():
+            hint = ("Превышен контекст модели (история диалога слишком "
+                    "велика). Начните новый диалог или сократите запрос.")
+        else:
+            hint = "LLM-сервер отклонил запрос."
+        return f"Ошибка запроса к LLM: {hint} Детали: {detail[:300]}"
+    if isinstance(e, openai.APITimeoutError):
+        return ("LLM не ответил за отведённое время (таймаут "
+                f"{get_settings().llm_timeout:.0f} с). Попробуйте "
+                "сократить запрос или повторить позже.")
+    if isinstance(e, openai.APIConnectionError):
+        return ("Нет связи с сервером LLM. Проверьте, что LM Studio "
+                f"запущен ({get_settings().llm_base_url}). Детали: "
+                f"{str(e)[:200]}")
+    if isinstance(e, openai.AuthenticationError):
+        return "Ошибка авторизации к серверу LLM (проверьте API-ключ)."
+    if isinstance(e, openai.RateLimitError):
+        return "Сервер LLM перегружен (лимит запросов). Попробуйте позже."
+    return f"Внутренняя ошибка при обращении к LLM: {type(e).__name__}: {str(e)[:200]}"
+
+
+def _audit_agent_error(user_id: int | None, cid: int | None,
+                       error_text: str):
+    """Сбой агентского цикла -> запись в аудит (Этап 20).
+
+    Аудит в проекте — журнал вызовов инструментов; но сбой LLM/цикла
+    пользователь ищет именно там. Пишем один раз при выходе по ошибке:
+    tool='agent', status='error'. Ничего не поднимаем наружу.
+    """
+    try:
+        with SessionLocal() as db:
+            db.add(AuditLog(user_id=user_id, conversation_id=cid,
+                            tool="agent", arguments="",
+                            result=error_text[:4000], status="error"))
+            db.commit()
+    except Exception:
+        log.exception("Не удалось записать сбой агента в аудит")
 
 
 def build_system_prompt(db: Session) -> str:
@@ -89,7 +148,8 @@ def build_system_prompt(db: Session) -> str:
         inventory = (f"\n\nИнвентарь устройств (сгруппирован по группам). "
                      f"В параметре device используй точные имена устройств или 'all' "
                      f"для всех VMware-устройств (по всем принтерам — один вызов "
-                     f"get_printers_report):\n" + "\n".join(lines))
+                     f"get_printers_report; по страницам — "
+                     f"get_printers_pages_report):\n" + "\n".join(lines))
     else:
         inventory = "\n\nИнвентарь устройств пуст."
 
@@ -115,6 +175,62 @@ def _get_owned(db: Session, cid: int, user: User) -> Conversation:
 
 def sse(obj: dict) -> str:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+# Диапазоны для админки (/admin/settings/agent); дефолты — env
+# (NETOPS_AGENT_CONTEXT_CHARS / NETOPS_AGENT_MAX_STEPS)
+AGENT_CONTEXT_MIN, AGENT_CONTEXT_MAX = 10000, 200000
+AGENT_STEPS_MIN, AGENT_STEPS_MAX = 1, 50
+
+
+def _agent_settings() -> tuple[int, int]:
+    """Эффективные параметры агента: (контекст-бюджет, лимит шагов).
+
+    AppSetting из БД перекрывает env-дефолт; любое нарушение диапазона
+    или сбой чтения -> env-дефолт. 2 SELECT'а на сообщение — дёшево,
+    кэш не нужен (валидация записи на POST-эндпоинте).
+    """
+    from ..models import AppSetting
+    s = get_settings()
+    ctx = s.agent_context_chars or DEFAULT_CONTEXT_CHARS
+    steps = s.agent_max_steps or DEFAULT_MAX_STEPS
+    try:
+        with SessionLocal() as db:
+            rows = {r.key: r.value for r in db.query(AppSetting).filter(
+                AppSetting.key.in_(("agent_context_chars",
+                                     "agent_max_steps"))).all()}
+        if "agent_context_chars" in rows:
+            ctx = int(rows["agent_context_chars"])
+        if "agent_max_steps" in rows:
+            steps = int(rows["agent_max_steps"])
+    except Exception:
+        log.exception("Не удалось прочитать настройки агента — env-дефолты")
+    if not (AGENT_CONTEXT_MIN <= ctx <= AGENT_CONTEXT_MAX):
+        ctx = s.agent_context_chars or DEFAULT_CONTEXT_CHARS
+    if not (AGENT_STEPS_MIN <= steps <= AGENT_STEPS_MAX):
+        steps = s.agent_max_steps or DEFAULT_MAX_STEPS
+    return ctx, steps
+
+
+def _trim_history_by_chars(history: list[dict], budget: int) -> list[dict]:
+    """Бюджет символов истории: старые сообщения отбрасываются, пока
+    суммарная длина содержимого не уместится в бюджет.
+
+    Отбрасываем с головы (самые старые); текущий запрос (последний
+    user) не трогаем. После обрезки первым обязан остаться user:
+    tool-сообщение без предшествующего assistant с tool_calls
+    невалидно для LLM API, поэтому не-user префикс снимается.
+    """
+    def _len(m: dict) -> int:
+        return len(m.get("content") or "") + len(str(m.get("tool_calls") or ""))
+
+    total = sum(_len(m) for m in history)
+    while total > budget and len(history) > 1:
+        total -= _len(history[0])
+        history.pop(0)
+    while history and history[0]["role"] != "user":
+        history.pop(0)
+    return history
 
 
 def _to_api_message(m: Message) -> dict:
@@ -272,20 +388,27 @@ async def run_agent_cycle(user: User, conversation: Conversation,
                .limit(s.history_messages).all())[::-1]
         history = [_to_api_message(m) for m in raw]
         system_prompt = build_system_prompt(db0)
-    while history and history[0]["role"] != "user":
-        history.pop(0)
+
+    # Эффективные параметры агента (AppSetting ?? env) и бюджет
+    # символов истории (Этап 20): без бюджета tool-результаты по
+    # 20К симв легко переполняли окно модели -> 400 от LM Studio.
+    context_chars, max_steps = _agent_settings()
+    history = _trim_history_by_chars(history, context_chars)
 
     try:
         model = model or await llm.pick_model()
-    except Exception:
-        yield sse({"error": "Сервер LLM недоступен, попробуйте позже"})
+    except Exception as e:
+        text = _llm_error_text(e)
+        log.exception("Не удалось выбрать модель LLM")
+        _audit_agent_error(user.id, cid, f"Выбор модели: {text}")
+        yield sse({"error": text})
         yield "data: [DONE]\n\n"
         return
 
     messages = [{"role": "system", "content": system_prompt}, *history]
     final_text = ""
     try:
-        for _step in range(MAX_AGENT_STEPS):
+        for _step in range(max_steps):
             queue = asyncio.Queue()
             task = asyncio.create_task(
                 _stream_turn(messages, model, queue))
@@ -367,9 +490,11 @@ async def run_agent_cycle(user: User, conversation: Conversation,
                 log.exception("Не удалось сохранить шаг агента в БД")
         else:
             yield sse({"delta": "\n\n(Остановлено: лимит шагов агента)"})
-    except Exception:
+    except Exception as e:
         log.exception("Ошибка агентского цикла")
-        yield sse({"error": "Сервер LLM недоступен, попробуйте позже"})
+        text = _llm_error_text(e)
+        _audit_agent_error(user.id, cid, text)
+        yield sse({"error": text})
     finally:
         if final_text:
             with SessionLocal() as db2:

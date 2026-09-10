@@ -86,6 +86,10 @@ def _ensure_audit_columns():
 _DEVICE_MIGRATIONS = [
     ("snmp_version", "VARCHAR(4) DEFAULT '2c'"),
     ("snmp_community", "VARCHAR(64) DEFAULT 'public'"),
+    # Этап 20: протоколы, MAC (discovery-дедуп), DNS-имя (discovery)
+    ("protocol", "VARCHAR(16) DEFAULT ''"),
+    ("mac", "VARCHAR(17)"),
+    ("dns_name", "VARCHAR(128) DEFAULT ''"),
 ]
 
 
@@ -110,30 +114,33 @@ def _ensure_device_columns(eng=None):
 
 
 def _ensure_printer_enum_value(eng=None):
-    """Расширяет postgres-ENUM devicetype значением 'printer' (этап SNMP).
+    """Расширяет postgres-ENUM devicetype новыми значениями.
 
     На postgres колонка devices.type — нативный тип devicetype: новое
-    значение Python-enum без ALTER TYPE делает INSERT printer
-    невозможным. На sqlite тип — VARCHAR (значение проходит всегда),
-    здесь тихо пропускаем. eng — только для тестов, как выше.
+    значение Python-enum без ALTER TYPE делает INSERT невозможным
+    ('printer' — этап SNMP; 'aruba'/'edgecore' — Этап 20). На sqlite
+    тип — VARCHAR (значение проходит всегда), тихо пропускаем.
+    eng — только для тестов, как выше.
     """
     from sqlalchemy import text
     eng = eng or engine
     if eng.dialect.name != "postgresql":
         return
-    try:
-        # ALTER TYPE ADD VALUE не управляется транзакцией (до PG 12),
-        # поэтому отдельное соединение с автокоммитом, а не begin()
-        with eng.connect().execution_options(
-                isolation_level="AUTOCOMMIT") as conn:
-            conn.execute(text(
-                "ALTER TYPE devicetype ADD VALUE IF NOT EXISTS 'printer'"))
-        log.info("ENUM devicetype расширен значением 'printer'")
-    except Exception as e:
-        # IF NOT EXISTS покрывает «значение уже есть» на PG 9.5+;
-        # на старых версиях это DuplicateObject — тоже норма
-        log.warning("Не удалось расширить ENUM devicetype (возможно, "
-                    "значение уже есть): %s", e)
+    for value in ("printer", "aruba", "edgecore"):
+        try:
+            # ALTER TYPE ADD VALUE не управляется транзакцией (до PG 12),
+            # поэтому отдельное соединение с автокоммитом, а не begin()
+            with eng.connect().execution_options(
+                    isolation_level="AUTOCOMMIT") as conn:
+                conn.execute(text(
+                    f"ALTER TYPE devicetype ADD VALUE IF NOT EXISTS "
+                    f"'{value}'"))
+            log.info("ENUM devicetype расширен значением '%s'", value)
+        except Exception as e:
+            # IF NOT EXISTS покрывает «значение уже есть» на PG 9.5+;
+            # на старых версиях это DuplicateObject — тоже норма
+            log.warning("Не удалось расширить ENUM devicetype значением "
+                        "%s (возможно, уже есть): %s", value, e)
 
 
 @asynccontextmanager
