@@ -74,14 +74,17 @@ def decrypt_value(encrypted_value: str) -> str:
 def is_encrypted(value: str) -> bool:
     """Проверяет, является ли значение зашифрованным (по формату).
     
+    Заметка: Fernet возвращает токен в base64-формате (начинается с 'g').
+    Функция encrypt_value() дополнительно кодирует его в base64, поэтому
+    итоговое значение начинается с 'Z0FBQUFB' (base64 от 'gAAAAA').
+    
     Заметка: это эвристическая проверка, не гарантирует, что значение
     действительно было зашифровано текущим ключом.
     """
     if not value or len(value) < 20:
         return False
     try:
-        decoded = b64decode(value.encode("ascii"))
-        # Fernet token имеет определённую структуру (версия + timestamp + ...)
-        return len(decoded) > 0 and decoded[0] == 128  # Fernet version byte
+        # Зашифрованное значение начинается с 'Z0FBQUFB' (двойной base64)
+        return value.startswith('Z0FBQUFB')
     except Exception:
         return False
