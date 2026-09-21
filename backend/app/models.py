@@ -82,7 +82,7 @@ class Device(Base):
     host: Mapped[str] = mapped_column(String(128))
     port: Mapped[int] = mapped_column(default=0)       # 0 = дефолтный для типа
     username: Mapped[str] = mapped_column(String(64), default="")
-    password: Mapped[str] = mapped_column(String(128), default="")
+    _password: Mapped[str] = mapped_column("password", String(512), default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     description: Mapped[str] = mapped_column(String(256), default="")
     source: Mapped[str] = mapped_column(
@@ -95,8 +95,8 @@ class Device(Base):
     # мигрированная БД ведут себя одинаково при raw-INSERT без SNMP-полей
     snmp_version: Mapped[str] = mapped_column(
         String(4), default="2c", server_default="2c")
-    snmp_community: Mapped[str] = mapped_column(
-        String(64), default="public", server_default="public")
+    _snmp_community: Mapped[str] = mapped_column(
+        "snmp_community", String(256), default="public", server_default="public")
     # Этап 20: протоколы подключения ("ssh,snmp"/"ssh"/"snmp"/""),
     # MAC (discovery-дедуп) и DNS-имя (discovery)
     protocol: Mapped[str] = mapped_column(
@@ -104,6 +104,30 @@ class Device(Base):
     mac: Mapped[str | None] = mapped_column(String(17), nullable=True)
     dns_name: Mapped[str] = mapped_column(
         String(128), default="", server_default="")
+
+    @property
+    def password(self) -> str:
+        """Возвращает расшифрованный пароль устройства."""
+        from .crypto import decrypt_value
+        return decrypt_value(self._password)
+
+    @password.setter
+    def password(self, value: str):
+        """Шифрует и сохраняет пароль устройства."""
+        from .crypto import encrypt_value
+        self._password = encrypt_value(value) if value else ""
+
+    @property
+    def snmp_community(self) -> str:
+        """Возвращает расшифрованную SNMP community строку."""
+        from .crypto import decrypt_value
+        return decrypt_value(self._snmp_community)
+
+    @snmp_community.setter
+    def snmp_community(self, value: str):
+        """Шифрует и сохраняет SNMP community строку."""
+        from .crypto import encrypt_value
+        self._snmp_community = encrypt_value(value) if value else ""
 
 
 class AuditLog(Base):

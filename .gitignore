@@ -1,11 +1,1 @@
-.venv/
-__pycache__/
-*.pyc
-netops.db
-backend/.env
-*.log
-Thumbs.db
-.env
-chainlit/.files/
-chainlit/.chainlit/translations/
-dev/
+Nothing needs to be added to the .gitignore file based on the provided changes. The listed files are all source code files (.py, .txt) and a model file, which should not be ignored according to the rules.

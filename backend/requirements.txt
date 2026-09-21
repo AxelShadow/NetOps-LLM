@@ -12,3 +12,4 @@ httpx
 jinja2
 python-multipart
 pysnmp>=7.1
+cryptography
