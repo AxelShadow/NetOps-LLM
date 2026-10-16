@@ -148,9 +148,25 @@ temp/
 encryption_key.pem
 *.key
 
+# Local databases (могут содержать внутренние данные; см. .dsh/security/policy.md)
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
 # Docker
 .docker/
 
 # Test artifacts
 test_results/
 reports/
+
+# Dev-инструменты: бинарь Tailwind CSS (~110 МБ) скачивается локально,
+# в репозитории ему делать нечего (восстановлено после потери правил)
+dev/
+# Chainlit: автогенерируемые переводы
+chainlit/.chainlit/translations/
+chainlit/.files/
+# Офлайн-зависимости, собранные локально для проверок без PyPI
+.tools/
+wheels/
