@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     # Сервисный токен для /internal/* (пусто = внутренние маршруты выключены)
     internal_service_token: str = Field(default="",
                                         env="NETOPS_INTERNAL_SERVICE_TOKEN")
+    # Ключ шифрования чувствительных данных в БД (Fernet, crypto.py).
+    # Пусто и dev_mode=false -> crypto.KeyConfigurationError при обращении
+    # к шифруемому полю (fail-fast вместо молчаливой смены ключа).
+    encryption_key: str = ""
     # Секрет proxy-авторизации для auth-check (пусто = header-режим
     # Chainlit выключен, работает только логин-форма)
     proxy_auth_secret: str = ""

@@ -73,6 +73,7 @@ SUITES: list[tuple[str, Path, Path, list[str], str]] = [
     ("tests/test_e2e_flow.py (Фаза 13)",          BE_PY, BACKEND_DIR, ["tests/test_e2e_flow.py"],                 "tests/test_e2e_flow.py"),
     ("tests/test_ui_switch.py (Фаза 14)",         BE_PY, BACKEND_DIR, ["tests/test_ui_switch.py"],                "tests/test_ui_switch.py"),
     ("tests/test_snmp_migration.py (Этап SNMP)",  BE_PY, BACKEND_DIR, ["tests/test_snmp_migration.py"],            "tests/test_snmp_migration.py"),
+    ("tests/test_crypto.py (шифрование БД)",      BE_PY, BACKEND_DIR, ["tests/test_crypto.py"],                  "tests/test_crypto.py"),
     ("tests/test_snmp_tools.py (Этап SNMP)",      BE_PY, BACKEND_DIR, ["tests/test_snmp_tools.py"],              "tests/test_snmp_tools.py"),
     ("tests/test_printers_report.py (Этап 19)",  BE_PY, BACKEND_DIR, ["tests/test_printers_report.py"],          "tests/test_printers_report.py"),
     ("tests/test_printer_discovery.py (Этап 19)", BE_PY, BACKEND_DIR, ["tests/test_printer_discovery.py"],       "tests/test_printer_discovery.py"),

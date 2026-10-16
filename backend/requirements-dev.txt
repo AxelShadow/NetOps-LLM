@@ -11,3 +11,7 @@ jinja2
 httpx
 python-multipart
 pytest
+# Шифрование чувствительных данных в БД (app/crypto.py, Fernet).
+# Без него падает чтение/запись Device.password и Device.snmp_community.
+# Проверено на 46.0.7 и 50.0.1.
+cryptography>=42.0,<52.0

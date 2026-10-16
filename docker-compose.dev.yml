@@ -22,6 +22,10 @@ services:
       NETOPS_MOCK_MODE: "true"         # все 15 инструментов — моки
       NETOPS_BOOTSTRAP_ADMIN: admin@example.com   # первый админ
       NETOPS_JWT_SECRET: dev-jwt-secret-change-me
+      # Ключ шифрования БД: без него crypto.py сгенерирует временный ключ
+      # и предупредит в логе (значения в БД переживут только до рестарта).
+      # Постоянный ключ — NETOPS_ENCRYPTION_KEY в .env (см. .env.example)
+      NETOPS_ENCRYPTION_KEY: ${NETOPS_ENCRYPTION_KEY:-}
       NETOPS_INTERNAL_SERVICE_TOKEN: dev-internal-token
       # Фаза 14: / отдаёт лендинг (новый UI по умолчанию в dev-стеке)
       NETOPS_USE_NEW_UI: "true"

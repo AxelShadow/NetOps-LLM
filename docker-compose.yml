@@ -12,6 +12,10 @@ services:
   app:
     build: ./backend
     env_file: .env
+    environment:
+      # :? — crypto.py падает при пустом ключе в проде (fail-fast на старте,
+      # а не молчаливая смена ключа и «неверный пароль» на устройствах)
+      NETOPS_ENCRYPTION_KEY: ${NETOPS_ENCRYPTION_KEY:?задайте в .env (см. .env.example)}
     depends_on: [db]
     restart: unless-stopped
 
