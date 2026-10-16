@@ -1,0 +1,66 @@
+# Контекст сборки backend (образ netops-llm-app), корень = ./backend.
+# Синтаксис .dockerignore (не .gitignore): пути от корня контекста,
+# `**` поддерживается, порядок правил значим, `!` — исключение из исключения.
+# Правило: в образ попадают только requirements.txt и app/.
+
+# --- виртуальные окружения и кэши Python ---
+.venv
+venv
+**/.venv
+__pycache__
+**/__pycache__
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+**/*.py[cod]
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.pytest_cache
+**/.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# --- БД и рантайм-артефакты (sqlite живёт в томе /data, не в образе) ---
+*.db
+**/*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+**/*.sqlite*
+*.log
+logs
+.files/
+**/.files/
+
+# --- секреты: не попадают ни в контекст, ни в слой образа ---
+.env
+.env.*
+*.key
+**/*.key
+*.pem
+**/*.pem
+*.crt
+*.p12
+.secrets
+
+# --- тесты и служебные скрипты (в образ копируется только app/) ---
+tests/
+**/tests/
+*_test.py
+**/*_test.py
+check_*.py
+smoke_test.py
+mock_smoke.py
+show_*.py
+migrate_zabbix.py
+
+# --- служебное ---
+.git
+.gitignore
+.dockerignore
+Dockerfile
+dockerfile
+*.md
+docs/

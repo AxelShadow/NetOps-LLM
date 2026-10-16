@@ -1,6 +1,16 @@
 FROM python:3.12-slim
 WORKDIR /app
+
+# PYTHONDONTWRITEBYTECODE: не писать .pyc в контейнере (в прод-сбое падала
+# именно запись markdown_it/__pycache__/*.pyc); PYTHONUNBUFFERED: живые логи.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# --no-cache-dir: pip-кэш не остаётся в слое (сохранено из исходного образа);
+# --no-compile: не генерировать .pyc при установке — меньше файлов и объёма.
+RUN pip install --no-cache-dir --no-compile -r requirements.txt
+
 COPY app ./app
+
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
