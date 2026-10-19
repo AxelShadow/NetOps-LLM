@@ -15,3 +15,5 @@ pytest
 # Без него падает чтение/запись Device.password и Device.snmp_community.
 # Проверено на 46.0.7 и 50.0.1.
 cryptography>=42.0,<52.0
+# Планировщик утренних отчётов (Этап 22), см. requirements.txt
+apscheduler==3.11.3

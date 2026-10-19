@@ -143,6 +143,38 @@ def _ensure_printer_enum_value(eng=None):
                         "%s (возможно, уже есть): %s", value, e)
 
 
+def _ensure_app_settings_text_column(eng=None):
+    """Расширяет app_settings.value до TEXT (было VARCHAR(128)).
+
+    Нужно для шаблонов писем и JSON-снимка алертов. SQLite тип колонки не
+    enforced (динамическая типизация) — там миграция не требуется; на
+    Postgres выполняем ALTER COLUMN TYPE. Ошибка не роняет старт: логируем
+    предупреждение (шаблон длиной >128 не сохранится — это видно в UI).
+
+    eng — только для тестов, как в _ensure_device_columns.
+    """
+    from sqlalchemy import inspect, text
+    eng = eng or engine
+    insp = inspect(eng)
+    if "app_settings" not in insp.get_table_names():
+        return
+    cols = {c["name"]: c for c in insp.get_columns("app_settings")}
+    value_type = str(cols.get("value", {}).get("type", "")).upper()
+    if "TEXT" in value_type:
+        return
+    if eng.dialect.name != "postgresql":
+        log.info("app_settings.value остаётся %s (sqlite: тип не enforced)",
+                 value_type or "неизвестен")
+        return
+    try:
+        with eng.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE app_settings ALTER COLUMN value TYPE TEXT"))
+        log.info("Колонка app_settings.value расширена до TEXT")
+    except Exception as e:
+        log.warning("Не удалось расширить app_settings.value до TEXT: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(engine)
@@ -150,8 +182,17 @@ async def lifespan(_app: FastAPI):
     _ensure_audit_columns()
     _ensure_device_columns()
     _ensure_printer_enum_value()
+    _ensure_app_settings_text_column()
     bootstrap_admin()
-    yield
+    # Планировщик утренних отчётов (Этап 22): старт безопасен для тестов —
+    # при NETOPS_SCHEDULER_ENABLED=false ничего не запускается, а импорт
+    # модуля не требует ни БД, ни SMTP.
+    from .scheduler.service import start_scheduler, stop_scheduler
+    start_scheduler()
+    try:
+        yield
+    finally:
+        stop_scheduler()
 
 
 app = FastAPI(title="NetOps LLM", lifespan=lifespan)

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
-from base64 import b64decode
+from base64 import urlsafe_b64decode
 from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -166,9 +166,21 @@ def decrypt_value(stored_value: str) -> str:
 
 
 def _token_bytes(value: str) -> bytes:
-    """Байты токена Fernet (добивает base64-паддинг, если он потерян)."""
-    padding = "=" * (-len(value) % 4)
-    return b64decode((value + padding).encode("ascii"))
+    """Байты токена Fernet (url-safe base64, паддинг восстанавливается).
+
+    Fernet кодирует токен url-safe алфавитом ('-' и '_'). Стандартный
+    b64decode молча выбрасывает эти символы, из-за чего разбор случайных
+    токенов падал (флейк: ~20% токенов) и decrypt_value возвращал
+    шифротекст как legacy-plaintext. Поэтому используем urlsafe-декодер:
+
+    * сначала пытаемся как есть (токен уже с паддингом от Fernet);
+    * если паддинг потерян/испорчен — добиваем до кратного 4 и повторяем.
+    """
+    try:
+        return urlsafe_b64decode(value.encode("ascii"))
+    except Exception:
+        padded = value + "=" * (-len(value) % 4)
+        return urlsafe_b64decode(padded.encode("ascii"))
 
 
 def is_encrypted(value: str) -> bool:

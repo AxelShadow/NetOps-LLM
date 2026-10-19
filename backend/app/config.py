@@ -4,7 +4,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="NETOPS_", env_file=".env")
+    # extra="ignore": посторонние ключи в .env не должны попадать в текст
+    # ValidationError, который pydantic печатает с ЗНАЧЕНИЕМ переменной
+    # (инцидент 2026-10-16: утечка DB_PASSWORD в лог). Неизвестные NETOPS_*
+    # молча игнорируются, как и ожидается для переменных других сервисов.
+    model_config = SettingsConfigDict(
+        env_prefix="NETOPS_", env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+psycopg2://netops:netops@db:5432/netops"
 
@@ -47,6 +52,31 @@ class Settings(BaseSettings):
     proxy_auth_secret: str = ""
     # Фаза 14: true — новый UI (лендинг / -> чат/админка), false — старый SPA
     use_new_ui: bool = False
+
+    # --- RAG по runbook'ам: Qdrant + OpenAI-совместимые эмбеддинги ----------
+    # Каталог документов (.md/.txt). В контейнере сюда монтируется том с
+    # runbook'ами; относительный путь считается от cwd (backend/).
+    rag_enabled: bool = False
+    rag_docs_dir: str = "runbooks"
+    rag_qdrant_url: str = "http://qdrant:6333"
+    rag_qdrant_api_key: str = ""
+    rag_qdrant_collection: str = "netops_runbooks"
+    rag_top_k: int = 5
+    rag_chunk_chars: int = 1200
+    rag_chunk_overlap: int = 150
+    rag_max_file_bytes: int = 1024 * 1024
+    # Эмбеддинги: пустые значения наследуют LLM-настройки (тот же
+    # OpenAI-совместимый сервер, обычно LM Studio / vLLM).
+    embedding_base_url: str = ""
+    embedding_model: str = ""
+    embedding_api_key: str = ""
+    embedding_timeout: float = 60
+    embedding_dim: int = 1024
+
+    # --- Планировщик утренних отчётов: APScheduler + SMTP (Zimbra) ---------
+    scheduler_enabled: bool = False
+    scheduler_tz: str = "Europe/Moscow"
+    scheduler_time_default: str = "08:00"
 
 
 @lru_cache

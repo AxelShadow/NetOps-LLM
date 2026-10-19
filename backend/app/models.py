@@ -151,10 +151,34 @@ class AppSetting(Base):
 
     Ключ -> строковое значение; дефолты и валидация — в точках
     использования (config.py env-дефолты, chat.py диапазоны).
+
+    value — TEXT (было VARCHAR(128)): сюда же кладутся шаблоны писем
+    утреннего отчёта и JSON-снимок алертов, которые в 128 символов не
+    помещаются. На существующих БД колонка расширяется авто-миграцией
+    (main.py::_ensure_app_settings_text_column).
     """
     __tablename__ = "app_settings"
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    value: Mapped[str] = mapped_column(String(128), default="")
+    value: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, default=lambda: dt.datetime.now(dt.UTC))
+
+
+class RagDocument(Base):
+    """Индекс RAG: какие документы и с какой версией проиндексированы.
+
+    Нужен для инкрементальной переиндексации: если sha256 файла не
+    изменился, чанки в Qdrant не пересчитываются. Источник — путь
+    относительно настроенного каталога runbook'ов (не абсолютный:
+    каталог может отличаться на dev/прод).
+    """
+    __tablename__ = "rag_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    sha256: Mapped[str] = mapped_column(String(64), default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    chunks: Mapped[int] = mapped_column(Integer, default=0)
+    indexed_at: Mapped[dt.datetime] = mapped_column(
         DateTime, default=lambda: dt.datetime.now(dt.UTC))
