@@ -36,6 +36,65 @@
     {% endif %}
 </div>
 
+{% if user.role.value == 'admin' %}
+{# Видимые точки входа в RAG и утренний отчёт: статусы собирает роутер
+   Dashboard через сервисы (только admin), шаблон только отображает. #}
+<h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Сервисы</h2>
+<div class="grid gap-4 md:grid-cols-2 mb-6">
+    <div class="bg-white rounded-xl shadow-sm p-5">
+        <p class="text-xs uppercase tracking-wide text-slate-400 font-semibold">RAG по runbook'ам</p>
+        {% if rag_status.available %}
+        <p class="text-lg font-semibold mt-1">
+            {% if rag_status.enabled %}
+            <span class="px-2 py-1 rounded bg-emerald-100 text-emerald-800 text-sm">включён</span>
+            {% else %}
+            <span class="px-2 py-1 rounded bg-slate-100 text-slate-600 text-sm">выключен</span>
+            {% endif %}
+        </p>
+        <p class="text-sm text-slate-500 mt-1">Документов: {{ rag_status.documents }}, чанков: {{ rag_status.chunks }}</p>
+        <p class="text-sm text-slate-500">Qdrant: {% if rag_status.qdrant_ok %}доступен{% else %}недоступен{% endif %}</p>
+        {% if rag_status.error %}
+        <p class="text-xs text-red-700 mt-1">Индексатор сообщает об ошибке — проверьте настройки RAG.</p>
+        {% endif %}
+        {% else %}
+        <p class="text-lg font-semibold mt-1 text-slate-400">недоступно</p>
+        <p class="text-xs text-slate-400 mt-1">{{ rag_status.error_kind }}</p>
+        {% endif %}
+        <a href="/admin/settings#rag"
+           class="inline-block mt-3 px-3 py-1.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium transition">
+            Настроить и переиндексировать
+        </a>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm p-5">
+        <p class="text-xs uppercase tracking-wide text-slate-400 font-semibold">Утренний отчёт</p>
+        {% if report_state.available %}
+        <p class="text-lg font-semibold mt-1">
+            {% if report_state.enabled %}
+            <span class="px-2 py-1 rounded bg-emerald-100 text-emerald-800 text-sm">включён</span>
+            {% else %}
+            <span class="px-2 py-1 rounded bg-slate-100 text-slate-600 text-sm">выключен</span>
+            {% endif %}
+        </p>
+        <p class="text-sm text-slate-500 mt-1">
+            Время: {{ report_state.time }} · планировщик: {% if report_state.planner_enabled %}включён{% else %}выключен{% endif %}
+        </p>
+        <p class="text-sm text-slate-500">Следующий запуск: {{ report_state.next_run or "—" }}</p>
+        <p class="text-sm text-slate-500">
+            Последний запуск:
+            {% if report_state.last_at %}{{ report_state.last_at }}{% if report_state.last_status %} ({{ report_state.last_status }}){% endif %}{% else %}ещё не выполнялся{% endif %}
+        </p>
+        {% else %}
+        <p class="text-lg font-semibold mt-1 text-slate-400">недоступно</p>
+        <p class="text-xs text-slate-400 mt-1">{{ report_state.error_kind }}</p>
+        {% endif %}
+        <a href="/admin/settings#report"
+           class="inline-block mt-3 px-3 py-1.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium transition">
+            Настроить
+        </a>
+    </div>
+</div>
+{% endif %}
+
 <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Разделы</h2>
 <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 mb-6">
     {% for label, href in nav %}

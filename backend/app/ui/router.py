@@ -141,10 +141,89 @@ def logout():
     return resp
 
 
+def _dashboard_rag_collect() -> dict:
+    """Синхронный сбор статуса RAG (выполняется в отдельном потоке)."""
+    from ..rag import service as rag_service
+    status = rag_service.get_status()
+    if not isinstance(status, dict):
+        raise TypeError("RAG вернул неожиданный формат статуса")
+    return status
+
+
+async def _dashboard_rag_status() -> dict:
+    """Сводка RAG для карточки Dashboard (без секретов/деталей исключений)."""
+    try:
+        status = await asyncio.to_thread(_dashboard_rag_collect)
+    except Exception as exc:
+        log.warning("Dashboard: статус RAG недоступен (%s)",
+                    type(exc).__name__, exc_info=True)
+        return {"available": False, "error_kind": _exc_kind(exc)}
+    return {
+        "available": True,
+        "enabled": bool(status.get("enabled")),
+        "documents": status.get("documents") or 0,
+        "chunks": status.get("chunks") or 0,
+        "qdrant_ok": bool(status.get("qdrant_ok")),
+        "error": bool(status.get("error")),
+    }
+
+
+def _dashboard_report_collect() -> tuple[dict, str, str]:
+    """Синхронный сбор состояния отчёта: get_state + runtime-настройки."""
+    from .. import settings_store
+    from ..scheduler import service as scheduler_service
+    from ..scheduler.settings import DEFAULTS
+
+    state = scheduler_service.get_state()
+    if not isinstance(state, dict):
+        raise TypeError("Планировщик вернул неожиданный формат состояния")
+    enabled_raw = settings_store.get_setting(
+        "scheduler.enabled", DEFAULTS["scheduler.enabled"])
+    time_raw = settings_store.get_setting(
+        "scheduler.time", DEFAULTS["scheduler.time"])
+    return state, enabled_raw, time_raw
+
+
+async def _dashboard_report_state() -> dict:
+    """Сводка утреннего отчёта для карточки Dashboard (без деталей ошибок)."""
+    try:
+        state, enabled_raw, time_raw = await asyncio.to_thread(
+            _dashboard_report_collect)
+    except Exception as exc:
+        log.warning("Dashboard: состояние планировщика недоступно (%s)",
+                    type(exc).__name__, exc_info=True)
+        return {"available": False, "error_kind": _exc_kind(exc)}
+    last = state.get("last_run")
+    if not isinstance(last, dict):
+        last = {}
+    return {
+        "available": True,
+        "enabled": str(enabled_raw or "").strip().lower()
+                   in {"1", "true", "yes", "on"},
+        "time": time_raw,
+        "planner_enabled": bool(state.get("enabled")),
+        "next_run": state.get("next_run") or "",
+        "last_at": last.get("at") or "",
+        "last_status": last.get("status") or "",
+    }
+
+
 @router.get("/")
-def dashboard(request: Request,
-              user: User = Depends(get_current_user_page)):
-    return _render(request, user, "pages/dashboard.html", {})
+async def dashboard(request: Request,
+                    user: User = Depends(get_current_user_page)):
+    """Dashboard: обзор системы + карточки статусов RAG/утреннего отчёта.
+
+    Карточки видны только admin. `get_status()`/`get_state()` синхронные и
+    могут ходить в сеть (Qdrant), поэтому выполняются в потоках через
+    asyncio.to_thread (параллельно) — event loop не блокируется. Ошибки
+    сервисов не роняют страницу: в контекст уходит «недоступно» + тип ошибки,
+    без str(exc) (design §6.7).
+    """
+    ctx: dict = {}
+    if user.role == Role.admin:
+        ctx["rag_status"], ctx["report_state"] = await asyncio.gather(
+            _dashboard_rag_status(), _dashboard_report_state())
+    return _render(request, user, "pages/dashboard.html", ctx)
 
 
 @router.get("/inventory")

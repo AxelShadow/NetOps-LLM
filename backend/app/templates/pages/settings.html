@@ -67,13 +67,15 @@
 
 {# --- Секция: утренний отчёт (редактируемая, Этап 22) --- #}
 {# Тот же паттерн lazy-load: фрагмент сам читает app_settings и состояние
-   планировщика, страница не собирает контекст. Пароль SMTP в HTML не попадает. #}
-<div hx-get="/admin/settings/partial/report" hx-trigger="load" hx-swap="innerHTML">
+   планировщика, страница не собирает контекст. Пароль SMTP в HTML не попадает.
+   id="report" — якорь для перехода с Dashboard (/admin/settings#report). #}
+<div id="report" hx-get="/admin/settings/partial/report" hx-trigger="load" hx-swap="innerHTML">
     <div class="bg-white rounded-xl shadow-sm p-8 text-center text-slate-400">Загрузка…</div>
 </div>
 
 {# --- Секция: RAG по runbook'ам (индекс и переиндексация, Этап 21) --- #}
-<div hx-get="/admin/settings/partial/rag" hx-trigger="load" hx-swap="innerHTML">
+{# id="rag" — якорь для перехода с Dashboard (/admin/settings#rag). #}
+<div id="rag" hx-get="/admin/settings/partial/rag" hx-trigger="load" hx-swap="innerHTML">
     <div class="bg-white rounded-xl shadow-sm p-8 text-center text-slate-400">Загрузка…</div>
 </div>
 

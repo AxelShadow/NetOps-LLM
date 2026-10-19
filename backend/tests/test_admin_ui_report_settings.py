@@ -613,3 +613,83 @@ def test_secret_masked_and_empty_password_keeps(client, monkeypatch):
     assert "08:15" in r.text
     assert "Пароль задан" in r.text
     assert settings_store.get_secret_setting("smtp.password") == pw
+
+
+# --- Dashboard: видимые точки входа в RAG/отчёт (task-9) --------------------
+
+def test_dashboard_admin_has_service_cards(client):
+    """Admin видит карточки RAG/отчёта со ссылками-якорями в настройки."""
+    _as(client, "admin")
+    r = client.get("/admin/")
+    assert r.status_code == 200
+    t = r.text
+    assert "RAG по runbook'ам" in t
+    assert "Утренний отчёт" in t
+    assert 'href="/admin/settings#rag"' in t
+    assert 'href="/admin/settings#report"' in t
+    assert "Документов:" in t and "Qdrant:" in t
+    assert "Следующий запуск:" in t
+
+
+def test_dashboard_engineer_has_no_service_cards(client):
+    """Не-admin не видит admin-карточек и ссылок в /admin/settings."""
+    _as(client, "eng")
+    r = client.get("/admin/")
+    assert r.status_code == 200
+    t = r.text
+    assert "/admin/settings#rag" not in t
+    assert "/admin/settings#report" not in t
+    assert "Утренний отчёт" not in t
+    assert "RAG по runbook'ам" not in t
+
+
+def test_dashboard_service_errors_show_unavailable(client, monkeypatch):
+    """Ошибка сервисов -> 200 «недоступно», без текста исключения и 500."""
+    _as(client, "admin")
+    from app.rag import service as rag_service
+    from app.scheduler import service as scheduler_service
+    monkeypatch.setattr(
+        rag_service, "get_status",
+        lambda: (_ for _ in ()).throw(RuntimeError("internal-detail-42")))
+    monkeypatch.setattr(
+        scheduler_service, "get_state",
+        lambda: (_ for _ in ()).throw(RuntimeError("internal-detail-42")))
+    r = client.get("/admin/")
+    assert r.status_code == 200
+    t = r.text
+    assert "недоступно" in t
+    assert "RuntimeError" in t
+    assert "internal-detail-42" not in t
+    # точки входа остаются доступными даже при недоступных сервисах
+    assert 'href="/admin/settings#rag"' in t
+    assert 'href="/admin/settings#report"' in t
+
+
+def test_dashboard_shows_service_status_values(client, monkeypatch):
+    """Карточки показывают счётчики/Qdrant и время/next_run/last_run."""
+    _as(client, "admin")
+    from app import settings_store
+    from app.rag import service as rag_service
+    from app.scheduler import service as scheduler_service
+    settings_store.set_settings({
+        "scheduler.enabled": "true",
+        "scheduler.time": "09:45",
+    })
+    monkeypatch.setattr(rag_service, "get_status", lambda: {
+        "enabled": True, "docs_dir": "runbooks", "documents": 7,
+        "chunks": 33, "last_indexed_at": None, "qdrant_ok": True,
+        "embedding_model": "embed-model", "error": ""})
+    monkeypatch.setattr(scheduler_service, "get_state", lambda: {
+        "enabled": True, "running": False, "next_run": "2026-01-02 09:45",
+        "jobs": [],
+        "last_run": {"at": "2026-01-01 09:45", "status": "ok",
+                     "message": ""}})
+    r = client.get("/admin/")
+    assert r.status_code == 200
+    t = r.text
+    assert "Документов: 7" in t and "чанков: 33" in t
+    assert "Qdrant: доступен" in t
+    assert "09:45" in t
+    assert "2026-01-02 09:45" in t
+    assert "2026-01-01 09:45" in t
+    assert "(ok)" in t
