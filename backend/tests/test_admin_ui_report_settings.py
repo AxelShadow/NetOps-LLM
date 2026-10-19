@@ -289,17 +289,45 @@ def test_run_now_error_no_500(client, monkeypatch):
     assert "Traceback" not in t
 
 
-def test_run_now_success(client, monkeypatch):
+def test_run_now_error_message_not_duplicated(client, monkeypatch):
+    """task-11: message из jobs.py уже с префиксом — UI не добавляет второй."""
     _as(client, "admin")
-    _patch_run_job_now(monkeypatch,
-                       result={"ok": True, "status": "ok",
-                               "message": "письмо отправлено",
-                               "sent_to": ["a@example.test", "b@example.test"]})
+    _patch_run_job_now(monkeypatch, result={
+        "ok": False, "status": "error",
+        "message": "Отчёт не отправлен: DeliveryError: SMTP не настроен",
+        "sent_to": []})
     r = client.post("/admin/settings/report/run-now", data={})
     assert r.status_code == 200
     t = r.text
-    assert "Отчёт отправлен" in t
-    assert "получателей: 2" in t
+    assert t.count("Отчёт не отправлен") == 1
+    assert "Отчёт не отправлен: Отчёт не отправлен" not in t
+    # короткий безопасный текст из jobs.py виден, деталей/трейсбека нет
+    assert "SMTP не настроен" in t
+    assert "Traceback" not in t
+
+
+def test_run_now_empty_message_fallback(client, monkeypatch):
+    """task-11: пустой message — подставляется собственный безопасный текст."""
+    _as(client, "admin")
+    _patch_run_job_now(monkeypatch, result={"ok": False, "status": "error",
+                                            "message": "", "sent_to": []})
+    r = client.post("/admin/settings/report/run-now", data={})
+    assert r.status_code == 200
+    assert r.text.count("Отчёт не отправлен") == 1
+
+
+def test_run_now_success(client, monkeypatch):
+    _as(client, "admin")
+    _patch_run_job_now(monkeypatch, result={
+        "ok": True, "status": "ok",
+        "message": "Отчёт отправлен: получателей 2; критичных 0, "
+                   "предупреждений 1, новых 0, устранено 0.",
+        "sent_to": ["a@example.test", "b@example.test"]})
+    r = client.post("/admin/settings/report/run-now", data={})
+    assert r.status_code == 200
+    t = r.text
+    assert t.count("Отчёт отправлен") == 1
+    assert "получателей 2" in t
 
 
 def test_rag_reindex_error_no_500(client, monkeypatch):

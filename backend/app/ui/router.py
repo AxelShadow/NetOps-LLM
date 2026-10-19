@@ -884,16 +884,18 @@ async def settings_report_run_now(
     else:
         result = result if isinstance(result, dict) else {}
         ok = bool(result.get("ok"))
-        notice = "Отчёт отправлен" if ok else "Отчёт не отправлен"
-        message = str(result.get("message") or "")
-        if message:
-            notice += ": " + message[:300]
-        sent_to = result.get("sent_to")
-        if ok and sent_to:
-            try:
+        # jobs.py уже кладёт в message готовый префикс («Отчёт отправлен: …» /
+        # «Отчёт не отправлен: …», короткий безопасный текст без str(exc)),
+        # поэтому свой префикс добавляем только если message пуст — иначе
+        # получался дубль «Отчёт не отправлен: Отчёт не отправлен: …»
+        # (task-11).
+        message = str(result.get("message") or "").strip()
+        notice = message[:300] if message else (
+            "Отчёт отправлен" if ok else "Отчёт не отправлен")
+        if ok and "получателей" not in notice.lower():
+            sent_to = result.get("sent_to")
+            if isinstance(sent_to, (list, tuple)) and sent_to:
                 notice += " (получателей: %d)" % len(sent_to)
-            except TypeError:
-                pass
     return _report_response(request, user, notice=notice, notice_ok=ok)
 
 

@@ -131,8 +131,14 @@ def _fetch_health() -> str:
     """
     from ..agent.tools import execute_tool
 
+    # truncate=False: утренний отчёт разбирает JSON целиком. Дефолтная обрезка
+    # execute_tool (MAX_RESULT) режет длинный отчёт на середине -> битый JSON.
     raw, status = execute_tool(
-        REPORT_TOOL, {}, user_id=None, conversation_id=None, user_role="admin")
+        REPORT_TOOL, {}, user_id=None, conversation_id=None,
+        user_role="admin", truncate=False)
+    # Диагностика крупных ответов: только статус и длина, без содержимого.
+    log.info("Инструмент %s: статус %s, длина ответа %d символов",
+             REPORT_TOOL, status, len(raw or ""))
     if status != "ok":
         detail = str(raw or "").strip()
         if detail:

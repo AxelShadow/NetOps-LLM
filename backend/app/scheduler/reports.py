@@ -209,9 +209,13 @@ def parse_health_report(raw: str) -> dict:
     try:
         data = json.loads(text)
     except (json.JSONDecodeError, ValueError) as exc:
+        # Длина входа — безопасная диагностика для крупных ответов: помогает
+        # отличить обрезку (длина ~MAX_RESULT инструмента) от иного сбоя.
         raise ReportError(
-            f"Отчёт инструмента: некорректный JSON ({type(exc).__name__})",
-            public="отчёт инструмента: некорректный JSON",
+            f"Отчёт инструмента: некорректный JSON ({type(exc).__name__}), "
+            f"длина {len(raw)} симв.",
+            public=("отчёт инструмента: некорректный JSON "
+                    f"(длина {len(raw)} симв.)"),
         ) from exc
     if not isinstance(data, dict):
         raise ReportError("Отчёт инструмента: ожидался JSON-объект",

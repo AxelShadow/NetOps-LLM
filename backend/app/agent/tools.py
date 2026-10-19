@@ -1376,8 +1376,19 @@ TOOLS_SCHEMA = get_tools_schema()
 
 
 def execute_tool(name: str, args: dict, user_id: int | None = None,
-                 conversation_id: int | None = None, user_role: str = "viewer") -> tuple[str, str]:
-    """Единая точка входа с проверкой прав и аудитом."""
+                 conversation_id: int | None = None, user_role: str = "viewer",
+                 truncate: bool = True) -> tuple[str, str]:
+    """Единая точка входа с проверкой прав и аудитом.
+
+    `truncate=True` (дефолт) обрезает результат до `MAX_RESULT` — это защита
+    контекста модели/LLM: длинный JSON-ответ не должен съедать бюджет
+    контекста. Внутренним потребителям, которым нужен ПОЛНЫЙ результат
+    (утренний отчёт разбирает JSON целиком), передаётся `truncate=False` —
+    иначе обрезка ломает JSON (`...` без закрывающих скобок).
+
+    Аудит и статус (`ok`/`error`/`denied`) от флага не зависят: в `audit_log`
+    по-прежнему пишется срез 4000 символов.
+    """
     status = "ok"
     duration_ms: int | None = None
     func = _registry.get(name)
@@ -1392,7 +1403,7 @@ def execute_tool(name: str, args: dict, user_id: int | None = None,
         started = time.monotonic()
         try:
             result, status = func(**args)
-            if len(result) > MAX_RESULT:
+            if truncate and len(result) > MAX_RESULT:
                 result = result[:MAX_RESULT]
         except Exception as e:
             log.exception("Ошибка инструмента %s", name)

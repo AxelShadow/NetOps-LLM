@@ -194,9 +194,10 @@ def _patch_execute_tool(monkeypatch) -> dict:
     }
 
     def fake_execute_tool(name, args, user_id=None, conversation_id=None,
-                          user_role="viewer"):
+                          user_role="viewer", truncate=True):
         state["calls"].append({"name": name, "args": args,
-                               "user_role": user_role})
+                               "user_role": user_role,
+                               "truncate": truncate})
         if state["error"] is not None:
             raise state["error"]
         return state["raw"], state["status"]
@@ -233,9 +234,10 @@ def test_run_morning_report_success(monkeypatch, caplog):
     assert isinstance(result["duration_ms"], int)
     assert "Отчёт отправлен" in result["message"]
 
-    # execute_tool вызван как у агента: admin, пустые аргументы
+    # execute_tool вызван как у агента: admin, пустые аргументы, полный JSON
     assert state["calls"] == [{"name": "get_infrastructure_health",
-                               "args": {}, "user_role": "admin"}]
+                               "args": {}, "user_role": "admin",
+                               "truncate": False}]
 
     # письмо собрано и «отправлено»
     assert len(FakeSmtp.instances) == 1
@@ -408,16 +410,26 @@ def test_run_morning_report_tool_error_status(monkeypatch):
 
 
 def test_run_morning_report_invalid_json(monkeypatch):
+    """Битый JSON: в сообщении — длина входа, без содержимого/секретов."""
     _patch_smtp(monkeypatch)
     state = _patch_execute_tool(monkeypatch)
     _seed_report_settings()
-    state["raw"] = "это не json"
+    broken = "internal-detail-42 не json"
+    state["raw"] = broken
 
     result = jobs.run_morning_report()
 
-    assert result["ok"] is False
-    assert "некорректный JSON" in result["message"]
+    assert result["ok"] is False and result["status"] == "error"
+    message = result["message"]
+    assert "некорректный JSON" in message
+    assert f"длина {len(broken)} симв." in message
+    assert "internal-detail-42" not in message
+    assert broken not in message
     assert not FakeSmtp.instances
+    audit = _last_audit()
+    assert audit is not None and audit.status == "error"
+    assert "длина" in (audit.result or "")
+    assert "internal-detail-42" not in (audit.result or "")
 
 
 def test_run_morning_report_exception_does_not_escape(monkeypatch):
@@ -545,6 +557,90 @@ def test_run_morning_report_body_limited(monkeypatch, caplog):
     assert "обрезано" in caplog.text
     # в логе длина, а не содержимое
     assert huge not in caplog.text
+
+
+def test_run_morning_report_big_report_not_truncated(monkeypatch, caplog):
+    """Регресс бага из эксплуатации: крупный JSON (> MAX_RESULT) не режется.
+
+    `_fetch_health` обязан звать execute_tool(truncate=False): дефолтная
+    обрезка по MAX_RESULT ломала JSON на середине и отчёт падал с
+    «некорректный JSON». Проверяем сквозь РЕАЛЬНЫЙ execute_tool (подменён
+    только зарегистрированный инструмент в `_registry`).
+    """
+    _patch_smtp(monkeypatch)
+    _seed_report_settings()
+
+    problems = [
+        {"time": "2026-10-19 07:00", "host": f"srv-{index:03d}",
+         "problem": (f"Long running problem description number {index:03d} "
+                     "on production host"),
+         "severity": "High", "ack": False}
+        for index in range(300)
+    ]
+    raw = json.dumps(_health_report(problems=problems), ensure_ascii=False)
+    assert len(raw) > tools_module.MAX_RESULT      # баг воспроизводим
+
+    class _BigReportTool:
+        tool_roles = ["admin"]
+
+        def __call__(self, **kwargs):
+            return raw, "ok"
+
+    monkeypatch.setitem(tools_module._registry, "get_infrastructure_health",
+                        _BigReportTool())
+
+    with caplog.at_level(logging.INFO):
+        result = jobs.run_morning_report()
+
+    assert result["ok"] is True, result["message"]
+    assert result["sent_to"] == [_RECIPIENT]
+    assert len(FakeSmtp.instances) == 1
+    body = FakeSmtp.instances[-1].message.get_content()
+    assert "Алертов Zabbix: 300" in body
+    assert "srv-000" in body
+    assert "srv-299" in body
+
+    snapshot = json.loads(_setting("scheduler.last_problem_keys"))
+    assert len(snapshot) == 300
+    assert _setting("scheduler.last_run_status") == "ok"
+
+    audit = _last_audit()
+    assert audit is not None and audit.status == "ok"
+    assert "Отчёт отправлен" in (audit.result or "")
+
+    # диагностика: длина ответа без содержимого
+    assert "длина ответа" in caplog.text
+    assert f"{len(raw)} символов" in caplog.text
+    assert raw[:200] not in caplog.text
+
+
+def test_execute_tool_truncate_flag(monkeypatch):
+    """execute_tool(truncate=False) — полный результат; по умолчанию — обрезка."""
+    payload = json.dumps(
+        {"items": ["x" * 100 for _ in range(400)]}, ensure_ascii=False)
+    assert len(payload) > tools_module.MAX_RESULT
+
+    class _HugeTool:
+        tool_roles = ["admin"]
+
+        def __call__(self, **kwargs):
+            return payload, "ok"
+
+    monkeypatch.setitem(tools_module._registry, "t_truncate_probe",
+                        _HugeTool())
+
+    full, status_full = tools_module.execute_tool(
+        "t_truncate_probe", {}, user_role="admin", truncate=False)
+    cut, status_cut = tools_module.execute_tool(
+        "t_truncate_probe", {}, user_role="admin", truncate=True)
+    default, status_default = tools_module.execute_tool(
+        "t_truncate_probe", {}, user_role="admin")
+
+    assert status_full == status_cut == status_default == "ok"
+    assert full == payload and len(full) == len(payload)
+    assert len(cut) == tools_module.MAX_RESULT
+    # дефолт сохраняет поведение агента/LLM
+    assert len(default) == tools_module.MAX_RESULT
 
 
 def test_truncate_body_short_body_unchanged():

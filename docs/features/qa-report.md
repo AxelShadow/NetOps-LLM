@@ -1,11 +1,14 @@
 # QA-отчёт: RAG по runbook'ам + утренний отчёт
 
-> Статус: независимая проверка завершена · Дата: 2026-10-19 · Ветка: `main` · HEAD: `4c7214f`
+> Статус: независимая проверка завершена · Дата: 2026-10-19 · Ветка: `main` · HEAD: `cb9d483`
 > Роль: `qa` (`.dsh/roles/qa.md`) · Задача: `task-5` на доске
 > Контракт: [`rag-and-scheduler-design.md`](rag-and-scheduler-design.md) (разделы 4–7)
-> Код в рабочем дереве **не закоммичен** — коммит после ревью и этого отчёта.
-> **Итоговый прогон (после фиксов C1/C2/C3/C4/O-1/O-2/O-3): `python run_tests.py` →
-> exit 0, всего 38 · OK 38 · FAIL 0 · MISSING 0, 3m 55s** (см. §2.1).
+> Фичи «RAG + утренний отчёт» закоммичены (`0656bd5`, UX-доработка `cb9d483`);
+> текущий **незакоммиченный** дифф — хотфикс бага из эксплуатации (task-11)
+> и правки QA-тестов под него; коммит хотфикса ждёт зелёного прогона.
+> **Итоговый прогон (после хотфикса `truncate`/task-11 и фиксов
+> C1/C2/C3/C4/O-1/O-2/O-3): `python run_tests.py` → exit 0, всего 38 ·
+> OK 38 · FAIL 0 · MISSING 0, 2m 40s** (см. §2.1).
 
 Документ фиксирует **фактические** прогоны: каждая цифра ниже получена командой,
 указанной рядом. Секретов, значений `.env` и внутренних адресов здесь нет.
@@ -14,26 +17,26 @@
 
 ## 1. Что проверено
 
-Дифф против `HEAD 4c7214f`:
+**Уже закоммичено** (`0656bd5` — «Этапы 21–22: RAG по runbook'ам + утренние
+отчёты», `cb9d483` — UX-карточки на Dashboard): зона 1 — RAG
+(`backend/app/rag/**`, инструмент `search_internal_docs` в
+`app/agent/tools.py`/`app/agent/mock.py`, `backend/reindex_rag.py`);
+зона 2 — утренний отчёт (`backend/app/scheduler/**`, админка
+`app/ui/router.py`, `components/settings/report_*.html`,
+`components/settings/rag_status.html`, `pages/settings.html`); сопутствующее
+(`app/api/chat.py` — пункт 15 промпта, `docker-compose*.yml`, `.env.example`,
+`docs/dev-checklist.md`, 10 авторских тест-файлов, `runbooks/**`).
 
-* команда (после фиксов C1/C2/C3/C4/O-1/O-2/O-3): изменено 19 файлов,
-  добавлено 16 (включая 10 авторских тест-файлов, 3 Jinja-шаблона секций,
-  `backend/reindex_rag.py`, `runbooks/README.md`, `runbooks/example-runbook.md`);
-* QA (эта задача): изменён `run_tests.py`, добавлены 3 независимых
-  тест-файла и этот отчёт;
-* смежные роли: `docs/features/review.md` (reviewer),
-  `docs/features/security-verdict.md` (security-guard);
-* зона 1 — RAG: `backend/app/rag/**`, инструмент `search_internal_docs`
-  (`app/agent/tools.py`, `app/agent/mock.py`), `backend/reindex_rag.py`;
-* зона 2 — утренний отчёт: `backend/app/scheduler/**`, админка
-  (`app/ui/router.py`, `components/settings/report_*.html`,
-  `components/settings/rag_status.html`, `pages/settings.html`);
-* сопутствующее: `app/api/chat.py` (пункт 15 системного промпта),
-  `docker-compose*.yml`, `.env.example` (политика C1), `docs/dev-checklist.md`.
+**Незакоммиченный дифф (проверен в этом прогоне) — хотфикс task-11 + QA:**
+`app/agent/tools.py` (`execute_tool(..., truncate=True)`), `scheduler/jobs.py`
+(`truncate=False` для отчёта), `scheduler/reports.py` (длина в public-ошибке),
+`ui/router.py` (run-now без дубля префикса), авторские тесты
+(`test_scheduler_jobs.py`, `test_admin_ui_report_settings.py`), мои QA-тесты
+(`test_scheduler_qa.py`, `test_admin_ui_report_qa.py`) и этот отчёт — 9 файлов.
 
 Проверялись критерии приёмки контракта §4–§7 и постановки задачи, а не
-намерения авторов. Продуктовый код и авторские тесты **не правились**;
-дефекты/наблюдения только зафиксированы ниже.
+намерения авторов. Продуктовый код и авторские тесты QA **не правил**;
+дефекты/наблюдения только фиксировались ниже, замечания переданы авторам.
 
 ---
 
@@ -48,7 +51,7 @@
 
 | Команда | Код | Итог |
 |---|---|---|
-| `python run_tests.py` (**итоговый**, после фиксов) | **0** | **всего 38 · OK 38 · FAIL 0 · MISSING 0**, время **3m 55s** |
+| `python run_tests.py` (**итоговый**, после хотфикса task-11 и фиксов) | **0** | **всего 38 · OK 38 · FAIL 0 · MISSING 0**, время **2m 40s** |
 
 Наборы 23–35 в реестре `SUITES` — новые (13 = 10 авторских + 3 независимых QA),
 порядок: после backend-наборов, перед chainlit; механика `OK/FAIL/MISSING`
@@ -66,9 +69,12 @@
 | 30 | `tests/test_report_parsing.py` | OK (0.8s) |
 | 31 | `tests/test_settings_store.py` | OK (2.0s) |
 | 32 | `tests/test_admin_ui_report_settings.py` | OK (15.5s) |
-| 33 | `tests/test_rag_pipeline_qa.py` (QA) | OK (2.2s) |
-| 34 | `tests/test_scheduler_qa.py` (QA) | OK (3.9s) |
-| 35 | `tests/test_admin_ui_report_qa.py` (QA) | OK (13.5s) |
+| 33 | `tests/test_rag_pipeline_qa.py` (QA) | OK (2.7s) |
+| 34 | `tests/test_scheduler_qa.py` (QA) | OK (4.8s) |
+| 35 | `tests/test_admin_ui_report_qa.py` (QA) | OK (14.3s) |
+
+Предыдущие полные прогоны: 3m 55s (после фиксов C1/C2/C3/C4/O-1/O-2/O-3) и
+2m 40s (после хотфикса `truncate`/task-11) — оба **38/38 OK**; в шапке — последний.
 
 Промежуточный прогон 38 наборов в момент, когда авторы ещё вносили фиксы, дал
 транзиентные **36 OK / 2 FAIL** (`test-admin`-наборы: маршрут уже обновлён, тесты
@@ -88,13 +94,13 @@
 | Команда | Код | Итог |
 |---|---|---|
 | `.\.venv\Scripts\python.exe -m pytest tests/test_rag_pipeline_qa.py -q` | 0 | **8 passed** |
-| `.\.venv\Scripts\python.exe -m pytest tests/test_scheduler_qa.py -q` | 0 | **20 passed** |
+| `.\.venv\Scripts\python.exe -m pytest tests/test_scheduler_qa.py -q` | 0 | **21 passed** |
 | `.\.venv\Scripts\python.exe -m pytest tests/test_admin_ui_report_qa.py -q` | 0 | **30 passed** |
 
-Итого независимых QA-проверок: **58 passed, 0 failed**.
-Авторские новые наборы отдельно: **222 passed, 1 skipped**
+Итого независимых QA-проверок: **59 passed, 0 failed**.
+Авторские новые наборы отдельно: **230 passed, 1 skipped**
 (symlink-тест индексатора — нет прав на symlink в этой среде).
-Всего по новым фичам: **280 passed + 1 skipped**, и все 38 наборов раннера зелёные.
+Всего по новым фичам: **289 passed + 1 skipped**, и все 38 наборов раннера зелёные.
 
 ### 2.3 CLI переиндексации `backend/reindex_rag.py` (временная БД)
 
@@ -117,7 +123,7 @@
 | `-Path runbooks` | 0 | 0 |
 | `-Path docs\features` | 0 | 0 (4 файла: дизайн, этот отчёт, security-verdict, review) |
 | копии 3 новых QA-тестов + `run_tests.py` | 0 | 0 |
-| **только добавленные строки диффа + все новые файлы** (42 файла, повторно после фиксов) | **0** | **0** |
+| **только добавленные строки диффа + все новые файлы** (42 файла после фиксов; повторно после хотфикса task-11 — 9 файлов незакоммиченного диффа) | **0** | **0** |
 | весь репозиторий (для контекста) | 2 | **33 high**, 0 medium/low, 1221 файл |
 
 Репозиторный FAIL — **предсуществующий** и не связан с диффом: находки в
@@ -176,6 +182,7 @@
 | S-14 | **C3**: раздутое тело письма (шаблон из админки) обрезается до 100 000 символов, в лог — только длина | `test_huge_rendered_body_is_capped` | PASS |
 | S-15 | **C4**: некорректное имя SMTP-хоста (схема/порт/путь) отклоняется до подключения, значение не утекает в текст ошибки | `test_smtp_host_with_scheme_rejected` | PASS |
 | S-16 | **O-2**: детали ошибки инструмента — только в серверный лог, не в `result.message`/`last_run_message`/аудит | `test_tool_error_details_not_leaked_to_telemetry` | PASS |
+| S-17 | **Хотфикс task-11**: большой валидный JSON `get_infrastructure_health` (> `MAX_RESULT`) не обрезается планировщиком (`execute_tool(..., truncate=False)`), у агента дефолт `truncate=True` сохранён; задание на таком отчёте отправляется (регресс «ReportError: некорректный JSON») | `test_big_health_json_not_truncated_and_report_sent` (реальный `execute_tool` + инструмент на 600 проблем, JSON > 20 000), `_patch_health` фиксирует `truncate=False` в вызове задания | PASS |
 
 ### 3.3 Админка и безопасность (design §5.2, §6)
 
@@ -192,15 +199,16 @@
 | A-9 | Сообщение о последнем запуске экранируется в HTML (нет XSS через лог/ошибку инструмента) | `test_last_run_message_is_html_escaped` | PASS |
 | A-10 | existing-страницы/секции не сломаны (параметры агента, проверки LLM/Zabbix/VMware) | авторский `test_admin_ui_report_settings.py::test_agent_partial_still_works`, `test_admin_ui_settings.py` (в раннере) | PASS |
 | A-11 | **C1-UI / C4-UI / O-1 / O-3**: учётка без TLS на внешнем хосте отклоняется; loopback разрешён; `https://host`/`host:port` в «Сервере» отклоняются; битый Jinja2-шаблон не сохраняется; текст исключения не попадает в HTML | `test_save_validation_error_inline_and_no_changes` (+C4/C1/O-3 кейсы), `test_save_none_with_user_on_loopback_allowed`, `test_test_email_endpoint_graceful_and_no_secret`; авторские `test_save_no_tls_with_user_rejected`, `test_save_no_tls_loopback_allowed`, `test_save_host_with_scheme_or_port_rejected`, `test_save_broken_*_template_rejected`, `test_test_email_error_no_500` | PASS |
+| A-12 | **task-11**: кнопка «Запустить отчёт сейчас» показывает `result.message` как есть (без дубля «Отчёт не отправлен: Отчёт не отправлен: …»), ровно одно вхождение префикса; при пустом message — фолбэк + число получателей | `test_run_now_endpoint_graceful` (сообщение с префиксом, успех, фолбэки) | PASS |
 
 ---
 
 ## 4. Дефекты и наблюдения
 
-Блокеров и major-дефектов **нет**: итоговый прогон 38/38 OK, 58 независимых
-QA-проверок зелёные. Дефекты O-1/O-2/O-3 и замечания безопасности
-C1/C2/C3/C4 исправлены авторами; ниже — что именно проверено после фиксов,
-затем оставшиеся информационные наблюдения.
+Блокеров и major-дефектов **нет**: итоговый прогон 38/38 OK, 59 независимых
+QA-проверок зелёные. Дефекты O-1/O-2/O-3, замечания безопасности
+C1/C2/C3/C4 и баг из эксплуатации task-11 исправлены авторами; ниже — что
+именно проверено после фиксов, затем оставшиеся информационные наблюдения.
 
 ### 4.1 Исправлено после фиксов и проверено QA (2026-10-19, вечер)
 
@@ -213,6 +221,7 @@ C1/C2/C3/C4 исправлены авторами; ниже — что имен�
 | O-1 | Текст непредвиденного исключения больше не выводится в инлайн-HTML — только тип ошибки (полный текст в серверный лог); `DeliveryError` тоже показывается как тип | `backend/app/ui/router.py` (`_exc_kind`, кнопки/статусы) | `test_test_email_endpoint_graceful_and_no_secret` (в HTML только `ошибка доставки (DeliveryError)`, без деталей), `test_reindex_endpoint_graceful`, `test_run_now_endpoint_graceful`; авторские `test_test_email_error_no_500`, `test_run_now_error_no_500` | **PASS** |
 | O-2 | Детали ошибки `get_infrastructure_health` пишутся только в серверный лог; в `result.message`, `scheduler.last_run_message` и аудит — только публичный статус | `backend/app/scheduler/jobs.py` (`_fetch_health`, `_exc_public_message`) | `test_tool_error_details_not_leaked_to_telemetry` (маркер `internal-detail-77` отсутствует в message/audit/last_run, присутствует в caplog) | **PASS** |
 | O-3 | Битый Jinja2-шаблон отклоняется при сохранении формы (инлайн, статус 200), а не при плановом запуске | `backend/app/ui/router.py` (`settings_report_save`) | `test_save_validation_error_inline_and_no_changes` (O-3-кейсы для темы и тела); авторские `test_save_broken_body_template_rejected`, `test_save_broken_subject_template_rejected` | **PASS** |
+| task-11 (хотфикс из эксплуатации) | «`ReportError: некорректный JSON`» при ручном запуске: `execute_tool` получил `truncate: bool = True` (прежнее поведение для агента), планировщик вызывает `truncate=False`; `parse_health_report` в public-ошибке даёт длину; UI run-now показывает `message` как есть (без дубля префикса) | `app/agent/tools.py`, `scheduler/jobs.py`, `scheduler/reports.py`, `ui/router.py` | `test_big_health_json_not_truncated_and_report_sent` (большой JSON > `MAX_RESULT` через реальный `execute_tool`: дефолт обрезает и ломает JSON, `truncate=False` — полный валидный JSON, отчёт уходит); `_patch_health` теперь проверяет, что задание передаёт `truncate=False`; `test_run_now_endpoint_graceful` (A-12) | **PASS** |
 
 Дополнительно проверена изоляция тестов: реальный invoke `get_infrastructure_health`
 в `test_real_tool_report_shape_when_zabbix_fails` больше не зависит от порядка
@@ -270,6 +279,9 @@ C1/C2/C3/C4 исправлены авторами; ниже — что имен�
 4. **Живые Zabbix / VMware vCenter / AD** — недоступны; форма отчёта
    проверена на реальной функции инструмента с подменённым Zabbix-клиентом
    и на мок-данных, но не на реальных алертах (severity/форматы времени).
+   Для task-11 регресс-тест использует синтетический отчёт на 600 проблем
+   (> `MAX_RESULT`) через **реальный** `execute_tool`; реальный JSON парка с
+   живого Zabbix (фактический размер/форма) не снимался.
 5. **Реальный запуск планировщика** по cron/настенному времени и смена
    таймзоны/DST — проверяются только объекты заданий и состояние
    (`get_state`, `apply_settings`), без ожидания срабатывания; путь
@@ -327,6 +339,11 @@ C1/C2/C3/C4 исправлены авторами; ниже — что имен�
   (это осознанное ужесточение; существующим деплоям нужен starttls/ssl или
   loopback-релей) — важно для документации/эксплуатации (`docs/dev-checklist.md`,
   `.env.example`).
+* **Поведение `execute_tool` разделено флагом `truncate`**: у агента дефолт
+  `truncate=True` (бюджет контекста LLM не изменился), у планировщика —
+  `truncate=False` (полный JSON). Внутренние потребители результата не должны
+  рассчитывать на обрезку по `MAX_RESULT`; аудит по-прежнему пишет срез
+  4000 символов — это стоит учесть при добавлении новых фоновых задач.
 * **Рабочая БД**: тесты и CLI-прогон изолированы (временная sqlite),
   `backend/netops.db` не изменялась (mtime 09.09.2026 20:02).
 
@@ -340,28 +357,34 @@ C1/C2/C3/C4 исправлены авторами; ниже — что имен�
 
 1. Все критерии приёмки контракта подтверждены независимыми прогонами:
    **итоговый `python run_tests.py` → 38/38 OK, 0 FAIL, 0 MISSING,
-   exit 0 (3m 55s)**; независимые QA-наборы → **58 passed, 0 failed**;
-   авторские новые наборы → **222 passed, 1 skipped** (symlink — нет прав).
+   exit 0 (2m 40s)**; независимые QA-наборы → **59 passed, 0 failed**;
+   авторские новые наборы → **230 passed, 1 skipped** (symlink — нет прав).
 2. Регресс старых 25 наборов отсутствует; предсуществующий флейк
    `test_crypto.py` зелёный.
 3. Целевые secret-scan чисты (в т.ч. отдельный скан 42 файлов «только
    добавленные строки диффа + новые файлы» — 0 находок); рабочая БД не
    затронута; новых зависимостей не появилось.
-4. Блокеров и major-дефектов нет. Дефекты O-1/O-2/O-3 и замечания
-   безопасности C1/C2/C3/C4 исправлены авторами, проверены после фиксов
-   (§4.1): C1 (SMTP без TLS), C2 (лимит файла до чтения), C3 (лимит тела
-   письма), C4 (валидация имени SMTP-хоста), O-1 (детали исключений не в
-   HTML), O-2 (детали ошибки инструмента не в телеметрии), O-3 (битый
-   Jinja2-шаблон отклоняется при сохранении). Открытые O-4…O-7 —
-   информационные, не блокируют.
+4. Блокеров и major-дефектов нет. Дефекты O-1/O-2/O-3, баг из эксплуатации
+   task-11 (`truncate`/битый JSON) и замечания безопасности C1/C2/C3/C4
+   исправлены авторами, проверены после фиксов (§4.1): C1 (SMTP без TLS),
+   C2 (лимит файла до чтения), C3 (лимит тела письма), C4 (валидация имени
+   SMTP-хоста), O-1 (детали исключений не в HTML), O-2 (детали ошибки
+   инструмента не в телеметрии), O-3 (битый Jinja2-шаблон отклоняется при
+   сохранении), task-11 (большой отчёт не обрезается; UI run-now без дубля
+   префикса). Открытые O-4…O-7 — информационные, не блокируют.
 5. Оговорки: реальные Qdrant/эмбеддинги/SMTP/Zabbix/VMware/AD и
    docker-развёртывание в среде недоступны — их обязательно проверить на
    сервере при первом деплое (design §9, §10, §5); до этого фичи считаются
    проверенными только на уровне моков. Политика C1 меняет требования к
-   конфигурации эксплуатации — учесть при деплое.
+   конфигурации эксплуатации — учесть при деплое. Баг task-11 воспроизведён
+   синтетическим отчётом > `MAX_RESULT` через реальный `execute_tool`;
+   реальный JSON парка с живого Zabbix не проверялся (§5.4).
 
-Коммит возможен после вердикта `security-guard` и ревью `reviewer`
-(AGENTS.md §3, §5). Коммитов в рамках этой задачи не делалось.
+Коммит хотфикса (task-11 + QA-правки) возможен после зелёного прогона —
+он получен (38/38 OK); фичи Этапов 21–22 уже закоммичены (`0656bd5`,
+`cb9d483`), вердикты `security-guard`/`reviewer` — в
+`docs/features/security-verdict.md` и `docs/features/review.md`.
+Коммитов в рамках QA-задачи не делалось.
 
 ---
 
@@ -372,13 +395,16 @@ C1/C2/C3/C4 исправлены авторами; ниже — что имен�
 * `backend/tests/test_rag_pipeline_qa.py` — 8 независимых сквозных
   RAG-проверок (индекс→поиск→инструмент→аудит, деградация, лимиты,
   path traversal).
-* `backend/tests/test_scheduler_qa.py` — 20 проверок отчёта (реальная форма
+* `backend/tests/test_scheduler_qa.py` — 21 проверка отчёта (реальная форма
   JSON инструмента, diff, SMTP-режимы + C1/C3/C4, O-2, инъекции, секреты,
-  жизненный цикл планировщика; изоляция от порядка запуска).
+  жизненный цикл планировщика; регресс task-11 «большой JSON не обрезается»;
+  изоляция от порядка запуска).
 * `backend/tests/test_admin_ui_report_qa.py` — 30 проверок админки (RBAC,
   валидация + C1-UI/C4-UI/O-3, маскирование секрета, устойчивость
-  эндпоинтов, XSS-экранирование, O-1).
+  эндпоинтов, XSS-экранирование, O-1, контракт run-now без дубля префикса).
 * `docs/features/qa-report.md` — этот отчёт.
 
 Изменено: `run_tests.py` — добавлены 13 наборов (позиции 23–35), всего **38**;
-механика и семантика `OK/FAIL/MISSING` не менялись. Коммитов не делалось.
+механика и семантика `OK/FAIL/MISSING` не менялись; QA-тесты обновлены под
+хотфикс task-11 (счётчики: RAG 8, отчёт 21, админка 30). Коммитов QA не
+делала — фичи закоммичены Lead (`0656bd5`, `cb9d483`), хотфикс ждёт коммита.

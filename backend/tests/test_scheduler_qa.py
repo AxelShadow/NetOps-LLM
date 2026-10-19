@@ -135,12 +135,18 @@ def _patch_smtp(monkeypatch) -> type[FakeSmtp]:
 
 
 def _patch_health(monkeypatch, raw: str, status: str = "ok") -> list[dict]:
-    """Подмена execute_tool: отчёт инструмента без опроса инфраструктуры."""
+    """Подмена execute_tool: отчёт инструмента без опроса инфраструктуры.
+
+    Подпись повторяет актуальный контракт `execute_tool` (включая
+    `truncate=False` после хотфикса большого JSON), иначе задание падало бы
+    с `TypeError` — это и была регрессия бага из эксплуатации.
+    """
     calls: list[dict] = []
 
     def fake_execute(name, args, user_id=None, conversation_id=None,
-                     user_role="viewer"):
-        calls.append({"name": name, "args": args, "user_role": user_role})
+                     user_role="viewer", truncate=True):
+        calls.append({"name": name, "args": args, "user_role": user_role,
+                      "truncate": truncate})
         return raw, status
 
     monkeypatch.setattr(tools_mod, "execute_tool", fake_execute)
@@ -315,7 +321,7 @@ def test_report_job_end_to_end(monkeypatch, caplog):
     assert result["status"] == "ok"
     assert result["sent_to"] == [RECIPIENT]
     assert calls == [{"name": "get_infrastructure_health", "args": {},
-                      "user_role": "admin"}]
+                      "user_role": "admin", "truncate": False}]
     assert len(fake.instances) == 1
     client = fake.instances[0]
     assert client.login_args == (USER, PWD)
@@ -501,7 +507,7 @@ def test_tool_error_details_not_leaked_to_telemetry(monkeypatch, caplog):
         result = jobs.run_morning_report()
 
     assert calls == [{"name": "get_infrastructure_health", "args": {},
-                      "user_role": "admin"}]
+                      "user_role": "admin", "truncate": False}]
     assert result["ok"] is False
     # публичная часть — статус инструмента, без деталей
     assert "get_infrastructure_health" in result["message"]
@@ -514,6 +520,57 @@ def test_tool_error_details_not_leaked_to_telemetry(monkeypatch, caplog):
     assert "internal-detail-77" not in (rows[0].result or "")
     # полные детали допустимы в серверном логе
     assert "internal-detail-77" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# 5b. регресс бага из эксплуатации: большой (>MAX_RESULT) валидный JSON
+# ---------------------------------------------------------------------------
+def test_big_health_json_not_truncated_and_report_sent(monkeypatch):
+    """Хотфикс «ReportError: некорректный JSON» на реальном парке.
+
+    `execute_tool` обрезал ответ `get_infrastructure_health` до `MAX_RESULT`
+    и ломал JSON. Контракт после хотфикса: у агента дефолт `truncate=True`
+    (бюджет контекста LLM), у планировщика — `truncate=False` (полный разбор).
+
+    Проверяется: (1) дефолт по-прежнему обрезает; (2) `truncate=False` даёт
+    валидный JSON целиком; (3) `run_morning_report()` на таком отчёте уходит.
+    """
+    _seed()
+    big_raw = _health_raw(problems=[
+        _problem(f"Проблема {i}", f"host-{i}") for i in range(600)])
+    assert len(big_raw) > tools_mod.MAX_RESULT, len(big_raw)
+
+    def big_tool():
+        return big_raw, "ok"
+
+    # execute_tool проверяет RBAC по tool_roles у функции из реестра
+    big_tool.tool_roles = ("viewer", "engineer", "admin")
+    monkeypatch.setitem(tools_mod._registry, "get_infrastructure_health",
+                        big_tool)
+
+    truncated, status = tools_mod.execute_tool(
+        "get_infrastructure_health", {}, user_role="admin")
+    assert status == "ok"
+    assert len(truncated) == tools_mod.MAX_RESULT
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(truncated)          # именно этот путь ломал JSON
+
+    full, status = tools_mod.execute_tool(
+        "get_infrastructure_health", {}, user_role="admin", truncate=False)
+    assert status == "ok"
+    assert full == big_raw
+    payload = json.loads(full)
+    assert len(payload["zabbix_problems"]) == 600
+
+    fake = _patch_smtp(monkeypatch)
+    result = jobs.run_morning_report()
+    assert result["ok"] is True, result["message"]
+    assert result["status"] == "ok"
+    assert fake.instances and fake.instances[-1].sent, "письмо не отправлено"
+    body = fake.instances[-1].sent[0].get_content()
+    assert "Проблема 0" in body
+    rows = _audit_rows()
+    assert len(rows) == 1 and rows[0].status == "ok"
 
 
 # ---------------------------------------------------------------------------

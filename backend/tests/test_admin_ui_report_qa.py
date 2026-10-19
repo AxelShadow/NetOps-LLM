@@ -336,6 +336,13 @@ def test_reindex_endpoint_with_real_disabled_rag(client, monkeypatch):
 
 
 def test_run_now_endpoint_graceful(client, monkeypatch):
+    """Новый контракт UI run-now: message показывается как есть, без дубля префикса.
+
+    `jobs.run_morning_report` уже кладёт в message готовый префикс
+    («Отчёт отправлен: …» / «Отчёт не отправлен: …») и безопасный текст,
+    поэтому страница не должна добавлять свой (иначе «Отчёт не отправлен:
+    Отчёт не отправлен: …»), но обязана дать фолбэк при пустом message.
+    """
     _as(client, "admin")
     from app.scheduler import service as scheduler_service
 
@@ -346,22 +353,47 @@ def test_run_now_endpoint_graceful(client, monkeypatch):
     response = client.post("/admin/settings/report/run-now")
     assert response.status_code == 200
     assert "Ручной запуск не выполнен" in response.text
+    assert "job crashed" not in response.text          # O-1: только тип ошибки
+
+    # Ошибка задания: message уже с префиксом — ровно одно вхождение, без дубля
+    message_error = ("Отчёт не отправлен: ReportError: инструмент "
+                     "get_infrastructure_health вернул статус error")
+    monkeypatch.setattr(scheduler_service, "run_job_now", lambda: {
+        "ok": False, "status": "error", "message": message_error,
+        "sent_to": [], "duration_ms": 1})
+    response = client.post("/admin/settings/report/run-now")
+    assert response.status_code == 200
+    assert response.text.count("Отчёт не отправлен") == 1
+    assert message_error in response.text
+    assert "Отчёт не отправлен: Отчёт не отправлен" not in response.text
+
+    # Успех: message как есть, счётчик из message не дублируется суффиксом
+    message_ok = ("Отчёт отправлен: получателей 1; критичных 0, "
+                  "предупреждений 2, новых 2, устранено 0.")
+    monkeypatch.setattr(scheduler_service, "run_job_now", lambda: {
+        "ok": True, "status": "ok", "message": message_ok,
+        "sent_to": ["ops@example.test"], "duration_ms": 2})
+    response = client.post("/admin/settings/report/run-now")
+    assert response.status_code == 200
+    assert response.text.count("Отчёт отправлен") == 1
+    assert message_ok in response.text
+    assert "получателей: 1" not in response.text
+
+    # Фолбэк: message пуст — короткое уведомление + число получателей
+    monkeypatch.setattr(scheduler_service, "run_job_now", lambda: {
+        "ok": True, "status": "ok", "message": "",
+        "sent_to": ["op1@example.test", "op2@example.test"], "duration_ms": 2})
+    response = client.post("/admin/settings/report/run-now")
+    assert response.status_code == 200
+    assert "Отчёт отправлен" in response.text
+    assert "получателей: 2" in response.text
 
     monkeypatch.setattr(scheduler_service, "run_job_now", lambda: {
-        "ok": False, "status": "error", "message": "нет получателей",
+        "ok": False, "status": "error", "message": "",
         "sent_to": [], "duration_ms": 1})
     response = client.post("/admin/settings/report/run-now")
     assert response.status_code == 200
     assert "Отчёт не отправлен" in response.text
-    assert "нет получателей" in response.text
-
-    monkeypatch.setattr(scheduler_service, "run_job_now", lambda: {
-        "ok": True, "status": "ok", "message": "отправлено",
-        "sent_to": ["ops@example.test"], "duration_ms": 2})
-    response = client.post("/admin/settings/report/run-now")
-    assert response.status_code == 200
-    assert "Отчёт отправлен" in response.text
-    assert "получателей: 1" in response.text
 
 
 def test_test_email_endpoint_graceful_and_no_secret(client, monkeypatch):
