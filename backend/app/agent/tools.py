@@ -1348,6 +1348,25 @@ def get_infrastructure_health():
 
     return json.dumps(report, ensure_ascii=False, default=str), "ok"
 
+# --- RAG: поиск по внутренним runbook'ам ---
+
+
+@register_tool(
+    name="search_internal_docs",
+    description="Поиск по внутренним runbook'ам и документации NetOps (RAG). "
+                "Вызывать при вопросах «как сделать», «что написано в инструкции», "
+                "по процедурам и регламентам. Возвращает фрагменты с путями.",
+    parameters={"type": "object",
+                "properties": {"query": {"type": "string"},
+                               "top_k": {"type": "integer", "minimum": 1, "maximum": 10}},
+                "required": ["query"]},
+    cache_ttl=60,
+)
+def search_internal_docs(query: str, top_k: int = None):
+    """Поиск по runbook'ам через RAG-фасад (ошибки не бросает)."""
+    from ..rag.service import search_documents
+    return search_documents(query, top_k)
+
 # ============================================================
 # Экспорт и execute_tool
 # ============================================================

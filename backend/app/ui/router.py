@@ -6,7 +6,9 @@
 (frontend/index.html) продолжает работать через /api/* без изменений.
 """
 import asyncio
+import ipaddress
 import logging
+import re
 from datetime import datetime, time as dtime
 from pathlib import Path
 from urllib.parse import quote
@@ -408,6 +410,501 @@ async def settings_agent_save(
              agent_steps=(str(steps_val) if error is None else steps),
              saved=(error is None and "agent_context_chars" in form),
              error=error))
+
+
+# --- Утренний отчёт: runtime-секция /admin/settings (Этап 22) ---------------
+#
+# Контракт — docs/features/rag-and-scheduler-design.md, разделы 5.1/5.2.
+# Значения хранятся в app_settings (реестр scheduler/settings.py), секрет
+# smtp.password — только в зашифрованном виде: в HTML попадают лишь метаданные
+# «задан/длина» (settings_store.secret_state/get_secret_setting, значение
+# никуда не выводится). Ошибки — инлайн во фрагменте со статусом 200, как в
+# форме агента: htmx 2.x не свапает 4xx.
+#
+# Импорты scheduler/rag — локальные: модули реализуются параллельно, и
+# страница настроек не должна падать, если один из них временно недоступен
+# (сигнатуры контракта фиксированы в дизайн-документе).
+
+
+def _exc_kind(exc: BaseException) -> str:
+    """Тип исключения для инлайн-сообщения (design §6.7).
+
+    На страницу выводится только класс ошибки: `str(exc)` непредвиденного
+    исключения может содержать внутренние адреса/детали, поэтому он уходит
+    только в серверный лог. Для обёрнутых ошибок (ReportError <- TemplateError)
+    показываем тип причины — он информативнее для админа.
+    """
+    cause = getattr(exc, "__cause__", None)
+    if isinstance(cause, BaseException):
+        return type(cause).__name__
+    return type(exc).__name__
+
+
+# SMTP-сервер: hostname/IP без схемы, порта, пробелов и слэшей (C4-UI).
+_HOSTNAME_RE = re.compile(
+    r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(?:\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$")
+# Loopback-имена; IP-адреса (IPv4/IPv6) распознаются через ipaddress.is_loopback
+# ниже — так в коде нет литералов приватных адресов.
+_LOOPBACK_HOSTS = frozenset({"localhost"})
+
+
+def _valid_smtp_host(raw: str) -> bool:
+    """Проверка поля «SMTP-сервер» (пусто = ещё не настроено, допустимо)."""
+    host = (raw or "").strip()
+    if not host:
+        return True
+    if "://" in host or any(ch in host for ch in " \t\r\n/\\"):
+        return False
+    if host.startswith("[") or host.endswith("]"):
+        return False
+    if host.count(":") > 1:          # IPv6-литерал без скобок
+        try:
+            ipaddress.IPv6Address(host)
+        except ValueError:
+            return False
+        return True
+    if ":" in host:                  # host:port — порт задаётся отдельным полем
+        return False
+    try:
+        ipaddress.ip_address(host)   # IPv4
+        return True
+    except ValueError:
+        pass
+    if len(host) > 253:
+        return False
+    return bool(_HOSTNAME_RE.fullmatch(host))
+
+
+def _is_loopback_host(raw: str) -> bool:
+    """Loopback-адрес: единственное исключение для SMTP без TLS (C1-UI)."""
+    host = (raw or "").strip().lower()
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _report_secret_meta() -> dict:
+    """Метаданные пароля SMTP для формы: задан ли и длина (значение — никогда)."""
+    from .. import settings_store
+    from ..scheduler.settings import SECRET_KEY
+
+    state = settings_store.secret_state(SECRET_KEY)
+    length = None
+    if state.get("is_set"):
+        try:
+            # Длина ИМЕННО пароля (в БД лежит шифротекст другой длины).
+            # Расшифровка нужна только для len(); само значение не выводится.
+            length = len(settings_store.get_secret_setting(SECRET_KEY))
+        except Exception as exc:  # SecretDecryptError/KeyConfigurationError
+            log.warning("Пароль SMTP задан, но не расшифровывается (%s)",
+                        type(exc).__name__)
+    return {"secret_is_set": bool(state.get("is_set")), "secret_length": length}
+
+
+def _report_form_values() -> dict:
+    """Текущие значения формы отчёта: app_settings поверх дефолтов реестра."""
+    from .. import settings_store
+    from ..scheduler.settings import DEFAULTS
+
+    def _val(key: str) -> str:
+        return settings_store.get_setting(key, DEFAULTS.get(key, ""))
+
+    security = _val("smtp.security") or DEFAULTS["smtp.security"]
+    values = {
+        "enabled": _val("scheduler.enabled").strip().lower()
+                   in {"1", "true", "yes", "on"},
+        "time": _val("scheduler.time"),
+        "recipients": _val("scheduler.recipients"),
+        "subject_template": _val("scheduler.subject_template"),
+        "body_template": _val("scheduler.body_template"),
+        "smtp_host": _val("smtp.host"),
+        "smtp_port": _val("smtp.port"),
+        "smtp_security": security,
+        "smtp_user": _val("smtp.user"),
+        "smtp_from": _val("smtp.from_email"),
+    }
+    values.update(_report_secret_meta())
+    return values
+
+
+def _report_status() -> dict:
+    """Состояние планировщика для блока статуса (без секретов)."""
+    from ..scheduler import service as scheduler_service
+    try:
+        state = scheduler_service.get_state()
+    except Exception as exc:
+        log.warning("Состояние планировщика недоступно (%s)",
+                    type(exc).__name__)
+        return {
+            "enabled": False, "running": False, "next_run": None, "jobs": [],
+            "last_run": {"at": "", "status": "", "message": ""},
+            "message": "Состояние планировщика недоступно: %s"
+                       % type(exc).__name__,
+        }
+    if not isinstance(state, dict):
+        return {"enabled": False, "running": False, "next_run": None,
+                "jobs": [], "last_run": {"at": "", "status": "", "message": ""},
+                "message": "Планировщик вернул неожиданный формат состояния"}
+    if not isinstance(state.get("last_run"), dict):
+        state["last_run"] = {"at": "", "status": "", "message": ""}
+    return state
+
+
+def _report_response(request: Request, user: User, *,
+                     report: dict | None = None,
+                     error: str | None = None,
+                     notice: str | None = None,
+                     notice_ok: bool = True):
+    """Фрагмент секции «Утренний отчёт» (всегда статус 200)."""
+    from ..scheduler.settings import (RECIPIENTS_MAX, SECURITY_MODES,
+                                      TEMPLATE_MAX_CHARS)
+
+    return templates.TemplateResponse(
+        request, "components/settings/report_form.html",
+        _ctx(request, user,
+             report=report if report is not None else _report_form_values(),
+             status=_report_status(),
+             error=error, notice=notice, notice_ok=notice_ok,
+             security_modes=list(SECURITY_MODES),
+             recipients_max=RECIPIENTS_MAX,
+             template_max_chars=TEMPLATE_MAX_CHARS))
+
+
+@router.get("/settings/partial/report")
+async def settings_report_partial(
+        request: Request,
+        user: User = Depends(require_roles_page(Role.admin))):
+    """HTMX-фрагмент секции «Утренний отчёт» с текущими настройками."""
+    return _report_response(request, user)
+
+
+@router.post("/settings/report")
+async def settings_report_save(
+        request: Request,
+        user: User = Depends(require_roles_page(Role.admin))):
+    """Сохранение настроек утреннего отчёта в app_settings.
+
+    Серверная валидация по контракту (design §5.2): время TIME_RE, порт
+    1..65535, security из SECURITY_MODES, получатели — через
+    delivery.validate_recipients и <= RECIPIENTS_MAX, шаблоны <=
+    TEMPLATE_MAX_CHARS. Ошибка -> инлайн во фрагменте, статус 200.
+    Пустое поле нового пароля не затирает сохранённый (set_settings).
+    После успешной записи — scheduler.service.apply_settings().
+    """
+    from .. import settings_store
+    from ..scheduler import delivery as scheduler_delivery
+    from ..scheduler import service as scheduler_service
+    from ..scheduler.settings import (PORT_MAX, PORT_MIN, RECIPIENTS_MAX,
+                                      SECRET_KEYS, SECURITY_MODES,
+                                      TEMPLATE_MAX_CHARS, TIME_RE)
+
+    form = dict(await request.form())
+    enabled = form.get("enabled") == "on"
+    time_val = (form.get("time") or "").strip()
+    recipients_raw = (form.get("recipients") or "").strip()
+    subject_val = form.get("subject_template") or ""
+    body_val = form.get("body_template") or ""
+    smtp_host = (form.get("smtp_host") or "").strip()
+    smtp_port_raw = (form.get("smtp_port") or "").strip()
+    smtp_security = (form.get("smtp_security") or "").strip()
+    smtp_user = (form.get("smtp_user") or "").strip()
+    smtp_from = (form.get("smtp_from") or "").strip()
+    new_password = form.get("smtp_password") or ""
+
+    values = {
+        "enabled": enabled,
+        "time": time_val,
+        "recipients": recipients_raw,
+        "subject_template": subject_val,
+        "body_template": body_val,
+        "smtp_host": smtp_host,
+        "smtp_port": smtp_port_raw,
+        "smtp_security": smtp_security,
+        "smtp_user": smtp_user,
+        "smtp_from": smtp_from,
+    }
+    values.update(_report_secret_meta())
+
+    error = None
+    port_val = None
+    if not re.match(TIME_RE, time_val):
+        error = "Время запуска: укажите HH:MM (например, 08:00)"
+    if error is None:
+        try:
+            port_val = int(smtp_port_raw)
+        except ValueError:
+            error = "SMTP-порт: укажите число 1–65535"
+        else:
+            if not (PORT_MIN <= port_val <= PORT_MAX):
+                error = "SMTP-порт: число 1–65535"
+    if error is None and smtp_security not in SECURITY_MODES:
+        error = "SMTP-защита: одно из " + ", ".join(SECURITY_MODES)
+    if error is None and not _valid_smtp_host(smtp_host):
+        # C4-UI: только имя хоста/IP — без схемы, порта, пробелов и слэшей.
+        error = ("SMTP-сервер: укажите имя хоста без схемы и порта "
+                 "(например, smtp.example.org)")
+    if error is None and smtp_security == "none" and smtp_user \
+            and not _is_loopback_host(smtp_host):
+        # C1-UI: учётная запись без TLS запрещена (исключение — loopback).
+        error = ("SMTP-защита: учётная запись без TLS запрещена — выберите "
+                 "starttls или ssl (исключение — loopback-адрес)")
+    if error is None and recipients_raw:
+        try:
+            recipients = scheduler_delivery.validate_recipients(recipients_raw)
+        except scheduler_delivery.DeliveryError as exc:
+            # str(exc) на страницу не выводим (design §6.7): детали — в лог.
+            log.warning("Проверка получателей отчёта: DeliveryError",
+                        exc_info=True)
+            error = ("Получатели: список не прошёл валидацию адресов (%s)"
+                     % _exc_kind(exc))
+        except Exception as exc:
+            log.warning("Проверка получателей недоступна (%s)",
+                        type(exc).__name__, exc_info=True)
+            error = ("Получатели: проверка недоступна (%s)"
+                     % type(exc).__name__)
+        else:
+            if len(recipients) > RECIPIENTS_MAX:
+                error = "Получатели: максимум %d адресов" % RECIPIENTS_MAX
+    if error is None and ("\r" in subject_val or "\n" in subject_val):
+        # Защита от инъекции заголовков: тема — одна строка (design §6.4)
+        error = "Тема письма: перевод строки недопустим"
+    if error is None and len(subject_val) > TEMPLATE_MAX_CHARS:
+        error = ("Тема письма: не больше %d символов"
+                 % TEMPLATE_MAX_CHARS)
+    if error is None and len(body_val) > TEMPLATE_MAX_CHARS:
+        error = ("Тело письма: не больше %d символов"
+                 % TEMPLATE_MAX_CHARS)
+    if error is None:
+        # O-3: битый Jinja2-шаблон не должен сохраняться «молча». Рендерим тем
+        # же рендерером, что и планировщик (контракт scheduler/reports.py:
+        # ReportError при синтаксической/рендер-ошибке); в инлайн-сообщение —
+        # только тип ошибки, полный текст — в серверный лог (design §6.7).
+        try:
+            from ..scheduler import reports as scheduler_reports
+        except Exception as exc:
+            log.warning("Проверка шаблонов отчёта недоступна (%s)",
+                        type(exc).__name__, exc_info=True)
+        else:
+            for label, text in (("Тема письма", subject_val),
+                                ("Тело письма", body_val)):
+                try:
+                    scheduler_reports.render_template(text, {})
+                except Exception as exc:
+                    log.warning("%s: синтаксическая ошибка шаблона (%s)",
+                                label, _exc_kind(exc), exc_info=True)
+                    error = ("%s: шаблон содержит синтаксическую ошибку (%s)"
+                             % (label, _exc_kind(exc)))
+                    break
+
+    if error is not None:
+        return _report_response(request, user, report=values, error=error)
+
+    payload = {
+        "scheduler.enabled": "true" if enabled else "false",
+        "scheduler.time": time_val,
+        "scheduler.recipients": recipients_raw,
+        "scheduler.subject_template": subject_val,
+        "scheduler.body_template": body_val,
+        "smtp.host": smtp_host,
+        "smtp.port": str(port_val),
+        "smtp.security": smtp_security,
+        "smtp.user": smtp_user,
+        "smtp.from_email": smtp_from,
+    }
+    if new_password:
+        payload["smtp.password"] = new_password
+    try:
+        settings_store.set_settings(payload, extra_secret_keys=SECRET_KEYS)
+    except Exception as exc:
+        log.exception("Не удалось сохранить настройки утреннего отчёта")
+        return _report_response(
+            request, user, report=values,
+            error="Не удалось сохранить настройки (%s). Подробности в логе "
+                  "сервера." % type(exc).__name__)
+
+    notice = "Настройки утреннего отчёта сохранены"
+    try:
+        applied = scheduler_service.apply_settings()
+    except Exception as exc:
+        log.warning("apply_settings не выполнен (%s)", type(exc).__name__)
+        notice += ". Планировщик: применить настройки не удалось (%s)" \
+                  % type(exc).__name__
+    else:
+        message = applied.get("message") if isinstance(applied, dict) else ""
+        if message:
+            notice += ". Планировщик: " + str(message)[:300]
+    return _report_response(request, user, notice=notice)
+
+
+@router.post("/settings/report/test-email")
+async def settings_report_test_email(
+        request: Request,
+        user: User = Depends(require_roles_page(Role.admin))):
+    """Тестовое письмо по сохранённым SMTP-настройкам (inline-результат)."""
+    from .. import settings_store
+    from ..scheduler import delivery as scheduler_delivery
+    from ..scheduler.settings import DEFAULTS
+
+    raw = settings_store.get_setting(
+        "scheduler.recipients", DEFAULTS["scheduler.recipients"])
+    if not (raw or "").strip():
+        return _report_response(
+            request, user,
+            notice="Тестовое письмо не отправлено: получатели не заданы — "
+                   "сохраните список в форме отчёта",
+            notice_ok=False)
+
+    def _send() -> int:
+        recipients = scheduler_delivery.validate_recipients(raw)
+        if not recipients:
+            raise scheduler_delivery.DeliveryError("список получателей пуст")
+        scheduler_delivery.send_email(
+            "NetOps: тестовое письмо",
+            "Проверка SMTP-настроек утреннего отчёта NetOps.\n"
+            "Если вы получили это письмо, отправка настроена верно.\n",
+            recipients)
+        return len(recipients)
+
+    notice, ok = "", False
+    try:
+        delivered = await asyncio.to_thread(_send)
+    except scheduler_delivery.DeliveryError as exc:
+        # Код/хост SMTP из текста ошибки — только в серверный лог (§6.7).
+        log.warning("Тестовое письмо: DeliveryError", exc_info=True)
+        notice = ("Тестовое письмо не отправлено: ошибка доставки (%s). "
+                  "Подробности в логе сервера." % _exc_kind(exc))
+    except Exception as exc:
+        log.warning("Тестовое письмо: ошибка отправки (%s)",
+                    type(exc).__name__, exc_info=True)
+        notice = ("Тестовое письмо не отправлено: %s. "
+                  "Подробности в логе сервера." % _exc_kind(exc))
+    else:
+        ok = True
+        notice = "Тестовое письмо отправлено: %d адрес(ов)" % delivered
+    return _report_response(request, user, notice=notice, notice_ok=ok)
+
+
+@router.post("/settings/report/run-now")
+async def settings_report_run_now(
+        request: Request,
+        user: User = Depends(require_roles_page(Role.admin))):
+    """Ручной запуск утреннего отчёта (без 500 при ошибке планировщика)."""
+    from ..scheduler import service as scheduler_service
+
+    notice, ok = "", False
+    try:
+        result = await asyncio.to_thread(scheduler_service.run_job_now)
+    except Exception as exc:
+        log.warning("Ручной запуск отчёта: ошибка (%s)",
+                    type(exc).__name__, exc_info=True)
+        notice = ("Ручной запуск не выполнен: %s. "
+                  "Подробности в логе сервера." % _exc_kind(exc))
+    else:
+        result = result if isinstance(result, dict) else {}
+        ok = bool(result.get("ok"))
+        notice = "Отчёт отправлен" if ok else "Отчёт не отправлен"
+        message = str(result.get("message") or "")
+        if message:
+            notice += ": " + message[:300]
+        sent_to = result.get("sent_to")
+        if ok and sent_to:
+            try:
+                notice += " (получателей: %d)" % len(sent_to)
+            except TypeError:
+                pass
+    return _report_response(request, user, notice=notice, notice_ok=ok)
+
+
+# --- RAG по runbook'ам: runtime-секция /admin/settings (Этап 21) -------------
+
+
+async def _rag_status_safe() -> dict:
+    """Статус индекса RAG; при ошибке модуля — безопасный дефолт (не 500).
+
+    `rag.service.get_status()` синхронный и может ходить в Qdrant (таймаут
+    до 10 с), поэтому вызывается через `asyncio.to_thread`: иначе event loop
+    (и весь сервер) блокируется на время недоступности Qdrant.
+    """
+    try:
+        from ..rag import service as rag_service
+        status = await asyncio.to_thread(rag_service.get_status)
+    except Exception as exc:
+        log.warning("Статус RAG недоступен (%s)", type(exc).__name__,
+                    exc_info=True)
+        return {
+            "enabled": False, "docs_dir": "", "documents": 0, "chunks": 0,
+            "last_indexed_at": None, "qdrant_ok": False,
+            "embedding_model": "",
+            "error": ("Ошибка получения статуса RAG (%s). "
+                      "Подробности в логе сервера." % _exc_kind(exc)),
+        }
+    if not isinstance(status, dict):
+        return {"enabled": False, "docs_dir": "", "documents": 0, "chunks": 0,
+                "last_indexed_at": None, "qdrant_ok": False,
+                "embedding_model": "",
+                "error": "RAG вернул неожиданный формат статуса"}
+    return status
+
+
+async def _rag_response(request: Request, user: User, *,
+                        rag: dict | None = None,
+                        notice: str | None = None,
+                        notice_ok: bool = True):
+    """Фрагмент секции «RAG по runbook'ам» (всегда статус 200)."""
+    resolved = rag if rag is not None else await _rag_status_safe()
+    return templates.TemplateResponse(
+        request, "components/settings/rag_status.html",
+        _ctx(request, user,
+             rag=resolved,
+             notice=notice, notice_ok=notice_ok))
+
+
+@router.get("/settings/partial/rag")
+async def settings_rag_partial(
+        request: Request,
+        user: User = Depends(require_roles_page(Role.admin))):
+    """HTMX-фрагмент секции «RAG по runbook'ам» со статусом индекса."""
+    return await _rag_response(request, user)
+
+
+@router.post("/settings/rag/reindex")
+async def settings_rag_reindex(
+        request: Request,
+        user: User = Depends(require_roles_page(Role.admin))):
+    """Переиндексация runbook'ов: блокирующая работа — в отдельном потоке.
+
+    Ошибка индексатора (Qdrant/эмбеддинги/каталог) показывается инлайном,
+    статус ответа 200: страница настроек не должна получать 500.
+    """
+    from ..rag import service as rag_service
+
+    notice, ok = "", False
+    try:
+        result = await asyncio.to_thread(rag_service.reindex_documents, False)
+    except Exception as exc:
+        log.warning("Переиндексация RAG: ошибка (%s)", type(exc).__name__,
+                    exc_info=True)
+        notice = ("Переиндексация не выполнена: %s. "
+                  "Подробности в логе сервера." % _exc_kind(exc))
+    else:
+        result = result if isinstance(result, dict) else {}
+        errors = result.get("errors") or []
+        ok = not errors
+        notice = ("Переиндексация завершена: добавлено %s, пропущено %s, "
+                  "удалено %s, чанков %s"
+                  % (result.get("indexed", 0), result.get("skipped", 0),
+                     result.get("deleted", 0), result.get("chunks", 0)))
+        duration = result.get("duration_ms")
+        if isinstance(duration, (int, float)):
+            notice += ", %.1f с" % (duration / 1000.0)
+        if errors:
+            notice += "; ошибок: %d — %s" % (
+                len(errors),
+                "; ".join(str(e)[:120] for e in list(errors)[:3]))
+    return await _rag_response(request, user, notice=notice, notice_ok=ok)
 
 
 # --- Аудит: HTMX-фрагменты (Фаза 4 миграции) -------------------------------

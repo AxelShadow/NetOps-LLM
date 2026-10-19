@@ -31,7 +31,7 @@ from app.models import AuditLog, User, Role  # noqa: E402
 # Схема БД для теста (без полного lifespan приложения)
 Base.metadata.create_all(engine)
 
-ROLE = "admin"  # роли по умолчанию разрешают все 21 инструментов
+ROLE = "admin"  # роли по умолчанию разрешают все 22 инструмента
 
 EXPECTED_MOCK_TOOLS = {
     "ping", "vmware_vms", "vmware_hosts", "vmware_snapshots",
@@ -41,6 +41,7 @@ EXPECTED_MOCK_TOOLS = {
     "snmp_info", "snmp_interfaces", "snmp_walk", "printer_info",
     "get_device_full_health", "get_infrastructure_health",
     "get_printers_report", "get_printers_pages_report",
+    "search_internal_docs",
 }
 
 

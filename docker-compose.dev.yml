@@ -13,6 +13,15 @@
 # в именованном томе devdata (сброс: docker compose ... down -v).
 
 services:
+  # Векторное хранилище RAG (Этап 21): в dev-стеке нужно, чтобы роут-трип
+  # «индексация -> поиск из чата» проверялся целиком. Наружу порт НЕ
+  # пробрасывается; в dev-стек доступен только как qdrant:6333.
+  qdrant:
+    image: qdrant/qdrant:v1.19.2   # явный пин; версия та же, что в проде
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+
   app:
     build: ./backend
     environment:
@@ -29,9 +38,18 @@ services:
       NETOPS_INTERNAL_SERVICE_TOKEN: dev-internal-token
       # Фаза 14: / отдаёт лендинг (новый UI по умолчанию в dev-стеке)
       NETOPS_USE_NEW_UI: "true"
+      # --- RAG (Этап 21): в dev включён, чтобы проверять индексацию и поиск.
+      # Эмбеддинги — мок (NETOPS_MOCK_MODE=true), Qdrant — реальный сервис.
+      NETOPS_RAG_ENABLED: "true"
+      NETOPS_RAG_DOCS_DIR: /data/runbooks
+      NETOPS_RAG_QDRANT_URL: http://qdrant:6333
       # LLM/Zabbix адреса не нужны: мок-режим не ходит в сеть
     volumes:
       - devdata:/data
+      # Корпус runbook'ов репозитория: правки видны контейнеру без пересборки.
+      # :ro — приложение только читает документы.
+      - ./runbooks:/data/runbooks:ro
+    depends_on: [qdrant]
     restart: unless-stopped
     # контейнеру нужен драйвер sqlite (pysqlite3 в stdlib) — ок
 
@@ -82,3 +100,6 @@ services:
 
 volumes:
   devdata:
+  # Индекс Qdrant dev-стенда. Сбрасывается вместе с devdata:
+  # `docker compose -f docker-compose.dev.yml down -v` — только dev.
+  qdrant_storage:

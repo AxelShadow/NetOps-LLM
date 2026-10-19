@@ -52,9 +52,13 @@ DEFAULTS: dict[str, str] = {
     "smtp.user": "",
     "smtp.password": "",
     "smtp.from_email": "",
+    # Служебные ключи: пишет планировщик, админка только показывает.
     "scheduler.last_run_at": "",
     "scheduler.last_run_status": "",
     "scheduler.last_run_message": "",
+    # Снимок ключей проблем (JSON-массив, лимит 500) для diff «новые/устранённые».
+    # Формат и лимит — scheduler/jobs.py::KEY_SNAPSHOT/SNAPSHOT_LIMIT.
+    "scheduler.last_problem_keys": "",
 }
 
 # Секреты: значения шифруются (settings_store.SECRET_KEYS + этот набор).

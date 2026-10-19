@@ -193,7 +193,7 @@ community из формы, имя из sysName (или printer-{ip}). Повто
 cd backend && .venv/Scripts/python.exe tests/test_agent_settings.py
 cd backend && .venv/Scripts/python.exe tests/test_printers_pages_report.py
 cd backend && .venv/Scripts/python.exe tests/test_printer_discovery.py   # +MAC/DNS/дедуп
-python run_tests.py   # 24 набора
+python run_tests.py   # 38 наборов (25 базовых + 13 новых RAG/планировщик/админка/QA)
 ```
 
 Мок-сценарии чата (dev-стек, NETOPS_MOCK_MODE=true):
@@ -215,3 +215,90 @@ python run_tests.py   # 24 набора
 | 8 | Настройки агента | /admin/settings → секция «Параметры агента» | Поля бюджет контекста (50000) и лимит шагов (20); изменение сохраняется |
 | 9 | Валидация настроек | Ввести 999999 / «abc» → Сохранить | Инлайн-ошибка с диапазоном, значение не применилось |
 | 10 | Discovery с MAC/DNS | Найти принтеры в реальной подсети | У новых строк MAC и DNS-имя (в карточке/БД); повторный запуск с изменённым IP переносит по MAC |
+
+## Этап 21: RAG по runbook'ам + утренний отчёт
+
+Состав стека: `web` (nginx, :8080) → `chainlit` (/chat) → `app` (FastAPI) →
+`qdrant` (векторный индекс, **порт наружу не пробрасывается**: доступен только
+из сети compose как `qdrant:6333`). Корпус runbook'ов — каталог `./runbooks`
+на хосте, в контейнере `/data/runbooks:ro` (правки без пересборки образа).
+Отдельный сервис вместо зависимости образа выбран после инцидента ENOSPC
+(`docs/docker-image-size/00-diagnosis.md`).
+
+Флаги (имена без значений): `NETOPS_RAG_ENABLED` (dev-стек: `true`, прод:
+`false` по умолчанию, включается оператором в `.env`), `NETOPS_RAG_DOCS_DIR`,
+`NETOPS_RAG_QDRANT_URL`, `NETOPS_SCHEDULER_ENABLED` (прод: `false` по
+умолчанию), `NETOPS_EMBEDDING_*` (пусто = наследуются `NETOPS_LLM_*`).
+В dev-стеке эмбеддинги — мок (`NETOPS_MOCK_MODE=true`), Qdrant — реальный.
+
+> **Честная оговорка о среде.** В среде разработки агентов **нет
+> docker-демона** (`docker info` → ошибка), поэтому команды `docker compose
+> up/exec/ps` из этого блока здесь **фактически не выполнялись**. Проверено
+> статически: `docker compose config --quiet` для обоих файлов с одноразовыми
+> dummy-переменными → код 0. Реальный подъём, индексация и отправка письма
+> проверяются на хосте с Docker.
+
+### Автоматически / статически (без docker-демона)
+
+```bash
+# валидация конфигурации (значения dummy-переменных в окружение, не из .env)
+docker compose -f docker-compose.yml config --quiet
+docker compose -f docker-compose.dev.yml config --quiet
+python run_tests.py    # 38 наборов (базовые + новые RAG/планировщик/админка/QA)
+```
+
+### Стенд (нужен docker-демон)
+
+```bash
+docker compose -f docker-compose.dev.yml up --build -d   # web+chainlit+app+qdrant
+docker compose -f docker-compose.dev.yml run --rm seed   # фикстуры
+docker compose -f docker-compose.dev.yml ps              # qdrant и app — Up
+```
+
+Порядок действий при изменениях в `runbooks/` (dev-стенд):
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --force-recreate app   # если менялись env (restart env не перечитывает)
+# Qdrant отвечает приложению (readyz, 200)
+docker compose -f docker-compose.dev.yml exec app python -c "import httpx; print(httpx.get('http://qdrant:6333/readyz', timeout=5).status_code)"
+# статус индекса: documents/chunks и время последней индексации
+docker compose -f docker-compose.dev.yml exec app python -c "from app.rag.service import get_status; print(get_status())"
+# переиндексация (force=True — пересчитать все файлы)
+docker compose -f docker-compose.dev.yml exec app python -c "from app.rag.service import reindex_documents; print(reindex_documents(force=True))"
+```
+
+### Ручная проверка (dev-стенд через nginx :8080)
+
+| № | Что проверить | Как | Ожидание |
+|---|---------------|-----|----------|
+| 1 | Qdrant жив | `exec app python -c "import httpx; print(httpx.get('http://qdrant:6333/readyz').status_code)"` | 200; порт 6333 на хосте **не** слушается (`docker compose ps` — у qdrant нет published ports) |
+| 2 | Индекс наполнен | статус индекса (см. блок выше) или `/admin/settings` → «RAG по runbook'ам» | `documents` ≥ 2 (README + example-runbook), `chunks` > 0, `last_indexed_at` свежий, `qdrant_ok=true` |
+| 3 | Переиндексация | изменить строку в `runbooks/example-runbook.md` → переиндексация | новое содержимое находится через поиск, `errors` пуст; повторный запуск — `skipped` = число файлов |
+| 4 | Поиск из чата | Чат → «Что написано в инструкции про ротацию журналов?» | шаг инструмента `search_internal_docs`, фрагменты с путями `runbooks/...` |
+| 5 | RAG выключен | **не в dev-стеке**: в мок-режиме RAG включён виртуально (indexer `_runtime_enabled`). Проверять на прод-конфигурации/локально: `NETOPS_MOCK_MODE=false`, `NETOPS_RAG_ENABLED=false` → тот же вопрос | инструмент отдаёт `status="error"` с понятной причиной (не 500); чат не падает |
+| 6 | Статус в админке | /admin/settings (admin) → секции «RAG по runbook'ам» и «Утренний отчёт» | статус индекса (`GET /admin/settings/partial/rag`) и статус планировщика видны; формы сохраняются; инлайн-ошибки валидации (время `HH:MM`, порт, получатели) |
+| 7 | Утренний отчёт вручную | /admin/settings → «Запустить отчёт сейчас» (`POST /admin/settings/report/run-now`) | статус последнего запуска: время/статус/сообщение; при отсутствии SMTP — понятная ошибка «не настроено», не 500 |
+| 8 | Тестовое письмо | /admin/settings → «Отправить тестовое письмо» (`POST /admin/settings/report/test-email`) | при настроенном SMTP письмо приходит получателям; пароль SMTP в HTML/логах **не** отображается (только «задан, N симв.») |
+
+Маршруты — из дизайна (`docs/features/rag-and-scheduler-design.md` §5.2) и
+UI-задачи frontend-dev; п.6–8 проверяются после сборки образа со страницей
+настроек. Если UI ещё не собран в вашем чекауте, п.2–5 проверяются командами
+из блока выше.
+
+### Прод (`docker-compose.yml`), на сервере с Docker
+
+1. Перед `up` — проверить место: новый образ `qdrant/qdrant:v1.19.2`
+   (~75 МБ сжатый плюс распакованный rootfs) и том `qdrant_storage`;
+   требования к запасу места — `docs/docker-image-size/host-disk-runbook.md`.
+2. Пин тега Qdrant менять только осознанно, сверив совместимость с текущим
+   индексом (мажорные обновления Qdrant могут требовать переиндексации).
+3. Включение RAG/планировщика — только через `.env` оператором
+   (`NETOPS_RAG_ENABLED=true`, `NETOPS_SCHEDULER_ENABLED=true`), после
+   переиндексации корпуса из `./runbooks`.
+4. **`docker compose down -v` на проде запрещён**: удаляет тома `pgdata`
+   (БД PostgreSQL) и `qdrant_storage` (индекс RAG). Индекс восстанавливается
+   переиндексацией, БД — только из дампа. `docker volume prune --all` тоже
+   запрещён (см. host-disk-runbook, раздел 3.7).
+5. Проверка после выката: `docker compose ps` (qdrant Up, у него нет
+   published ports), `/admin/settings` — статус индекса, тестовое письмо.
+

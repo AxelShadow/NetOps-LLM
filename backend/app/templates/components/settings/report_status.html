@@ -1,0 +1,42 @@
+{# Блок статуса утреннего отчёта (внутри report_form.html).
+   Ожидает status — dict scheduler.service.get_state():
+     {enabled, running, next_run, jobs, last_run:{at,status,message}, message}.
+   Показываются только несекретные данные планировщика.
+   Классы — только из уже собранного tailwind.css. #}
+<div class="mt-4">
+    <h3 class="text-sm font-semibold mb-2">Статус планировщика</h3>
+    {% set last = status.last_run if status.last_run is defined and status.last_run else {} %}
+    <dl class="grid gap-2 md:grid-cols-2 text-xs">
+        <div class="flex gap-2">
+            <dt class="text-slate-500">Планировщик:</dt>
+            <dd class="font-medium">
+                {% if status.running %}работает
+                {% elif status.enabled %}включён (ожидает запуска)
+                {% else %}выключен (NETOPS_SCHEDULER_ENABLED=false){% endif %}
+            </dd>
+        </div>
+        <div class="flex gap-2">
+            <dt class="text-slate-500">Следующий запуск:</dt>
+            <dd class="font-medium">{{ status.next_run or "—" }}</dd>
+        </div>
+        <div class="flex gap-2">
+            <dt class="text-slate-500">Последний запуск:</dt>
+            <dd class="font-medium">{{ last.at or "ещё не выполнялся" }}</dd>
+        </div>
+        <div class="flex gap-2">
+            <dt class="text-slate-500">Результат:</dt>
+            <dd class="font-medium">
+                {% set last_status = last.status or "" %}
+                {% if last_status == "ok" %}<span class="text-emerald-700">успешно</span>
+                {% elif last_status %}<span class="text-red-700">{{ last_status }}</span>
+                {% else %}—{% endif %}
+            </dd>
+        </div>
+    </dl>
+    {% if last.message %}
+    <p class="text-xs text-slate-500 mt-1">Сообщение: {{ last.message }}</p>
+    {% endif %}
+    {% if status.message %}
+    <p class="text-xs text-slate-400 mt-2">{{ status.message }}</p>
+    {% endif %}
+</div>

@@ -23,7 +23,7 @@
 """
 import os
 import sys
-from base64 import b64decode, b64encode
+from base64 import urlsafe_b64decode
 from pathlib import Path
 
 # Windows-консоль по умолчанию cp1251: кириллица в выводе не кодируется
@@ -81,7 +81,10 @@ def main() -> int:
 
     print("2. is_encrypted и legacy-plaintext")
     encoded = crypto.encrypt_value("secret-value")
-    decoded = b64decode(encoded + "=" * (-len(encoded) % 4))
+    # Токен Fernet — url-safe base64; стандартный b64decode молча выбрасывает
+    # '-'/'_' и на части случайных токенов падает (флейк ~20%). Декодируем
+    # тем же url-safe декодером, что и crypto._token_bytes.
+    decoded = urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
     check("первый байт токена — версия 0x80", decoded[0] == 0x80)
     check("токен Fernet распознан", crypto.is_encrypted(encoded))
     check("обычный текст не распознан", not crypto.is_encrypted("public"))

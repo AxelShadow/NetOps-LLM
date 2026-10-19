@@ -440,6 +440,48 @@ def mock_get_printers_pages_report(args: dict) -> tuple[str, str]:
     })
 
 
+# ------------------------------------------------------------
+# RAG по runbook'ам
+# ------------------------------------------------------------
+
+def mock_search_internal_docs(args: dict) -> tuple[str, str]:
+    """Мок RAG-поиска: детерминированные фрагменты без Qdrant и эмбеддингов."""
+    _check_error(args)
+    query = str(args.get("query") or "проверка")
+    return _json({
+        "query": query,
+        "hits": [
+            {
+                "source": "example-runbook.md",
+                "heading": "Диагностика > Проверка доступности",
+                "chunk": 0,
+                "score": 0.91,
+                "text": ("Мок-фрагмент runbook'а: для проверки доступности "
+                         "используйте ping и zabbix_problems; при недоступности "
+                         "проверьте линк на коммутаторе."),
+            },
+            {
+                "source": "example-runbook.md",
+                "heading": "Диагностика > Zabbix",
+                "chunk": 1,
+                "score": 0.78,
+                "text": ("Мок-фрагмент runbook'а: активные проблемы смотрите "
+                         "через zabbix_problems, историю метрики — через "
+                         "zabbix_history."),
+            },
+            {
+                "source": "example-runbook.md",
+                "heading": "Регламент > Эскалация",
+                "chunk": 2,
+                "score": 0.63,
+                "text": ("Мок-фрагмент runbook'а: если проблема не устранена "
+                         "за 30 минут, эскалируйте дежурному инженеру."),
+            },
+        ],
+        "note": "Мок-режим: фрагменты сгенерированы без Qdrant и эмбеддингов.",
+    })
+
+
 # Словарь: имя инструмента -> мок-функция (args: dict) -> (json-строка, status)
 MOCK_TOOLS = {
     "ping": mock_ping,
@@ -463,4 +505,5 @@ MOCK_TOOLS = {
     "get_infrastructure_health": mock_get_infrastructure_health,
     "get_printers_report": mock_get_printers_report,
     "get_printers_pages_report": mock_get_printers_pages_report,
+    "search_internal_docs": mock_search_internal_docs,
 }

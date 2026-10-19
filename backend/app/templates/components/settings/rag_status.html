@@ -1,0 +1,77 @@
+{# HTMX-фрагмент: секция «RAG по runbook'ам» на /admin/settings (Этап 21).
+   Ожидает:
+     rag     — dict rag.service.get_status(): enabled, docs_dir, documents,
+               chunks, last_indexed_at, qdrant_ok, embedding_model, error;
+     notice  — str|None: результат переиндексации/действия;
+     notice_ok — bool: цвет notice (успех/ошибка).
+   Секретов и содержимого документов не показывает: только счётчики,
+   путь каталога, модель эмбеддингов и тип ошибки.
+   Классы — только из уже собранного tailwind.css. #}
+<div id="rag-settings" class="bg-white rounded-xl shadow-sm p-4 mb-4">
+    <h2 class="text-base font-bold mb-1">RAG по runbook'ам</h2>
+    <p class="text-xs text-slate-500 mb-3">
+        Поиск по внутренним инструкциям из чата (инструмент
+        <code>search_internal_docs</code>). Индекс хранится в Qdrant,
+        документы читаются из каталога runbook'ов.
+    </p>
+
+    {% if notice %}
+    <div class="mb-3 px-4 py-2.5 rounded-md text-sm
+        {% if notice_ok %}bg-emerald-50 border border-emerald-300 text-emerald-800
+        {% else %}bg-red-50 border border-red-200 text-red-800{% endif %}">{{ notice }}</div>
+    {% endif %}
+
+    <dl class="grid gap-2 md:grid-cols-2 text-xs">
+        <div class="flex gap-2">
+            <dt class="text-slate-500">Включён:</dt>
+            <dd class="font-medium">
+                {% if rag.enabled %}<span class="text-emerald-700">да</span>
+                {% else %}<span class="text-slate-500">нет (NETOPS_RAG_ENABLED=false)</span>{% endif %}
+            </dd>
+        </div>
+        <div class="flex gap-2">
+            <dt class="text-slate-500">Qdrant:</dt>
+            <dd class="font-medium">
+                {% if rag.qdrant_ok %}<span class="text-emerald-700">доступен</span>
+                {% else %}<span class="text-red-700">недоступен</span>{% endif %}
+            </dd>
+        </div>
+        <div class="flex gap-2">
+            <dt class="text-slate-500">Каталог документов:</dt>
+            <dd class="font-medium break-all">{{ rag.docs_dir or "—" }}</dd>
+        </div>
+        <div class="flex gap-2">
+            <dt class="text-slate-500">Модель эмбеддингов:</dt>
+            <dd class="font-medium">{{ rag.embedding_model or "—" }}</dd>
+        </div>
+        <div class="flex gap-2">
+            <dt class="text-slate-500">Документов:</dt>
+            <dd class="font-medium">{{ rag.documents or 0 }}</dd>
+        </div>
+        <div class="flex gap-2">
+            <dt class="text-slate-500">Чанков в индексе:</dt>
+            <dd class="font-medium">{{ rag.chunks or 0 }}</dd>
+        </div>
+        <div class="flex gap-2">
+            <dt class="text-slate-500">Последняя индексация:</dt>
+            <dd class="font-medium">{{ rag.last_indexed_at or "ещё не выполнялась" }}</dd>
+        </div>
+    </dl>
+    {% if rag.error %}
+    <p class="text-xs text-red-700 mt-2">Ошибка: {{ rag.error }}</p>
+    {% endif %}
+
+    <form hx-post="/admin/settings/rag/reindex" hx-target="#rag-settings"
+          hx-swap="outerHTML" class="mt-3 flex flex-wrap items-center gap-2">
+        <button type="submit" hx-disabled-elt="this"
+                class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">
+            Переиндексировать
+        </button>
+        <img src="/admin/static/img/spinner.svg" class="htmx-indicator"
+             width="16" height="16" alt="...">
+        <span class="text-xs text-slate-400">
+            Инкрементально по sha256: неизменённые файлы пропускаются.
+            Операция может занять время.
+        </span>
+    </form>
+</div>

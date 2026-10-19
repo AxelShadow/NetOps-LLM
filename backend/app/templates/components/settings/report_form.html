@@ -1,0 +1,175 @@
+{# HTMX-фрагмент: секция «Утренний отчёт» на /admin/settings (Этап 22).
+   Ожидает:
+     report         — dict: enabled, time, recipients, subject_template,
+                      body_template, smtp_host, smtp_port, smtp_security,
+                      smtp_user, smtp_from, secret_is_set (bool),
+                      secret_length (int|None);
+     status         — dict scheduler.service.get_state(): enabled, running,
+                      next_run, last_run{at,status,message}, message;
+     error          — str|None: инлайн-ошибка валидации (ответ со статусом 200,
+                      как в agent_form.html);
+     notice         — str|None: результат сохранения/действия;
+     notice_ok      — bool: цвет notice (успех/ошибка);
+     security_modes — list[str] (starttls|ssl|none);
+     recipients_max, template_max_chars — int.
+
+   Пароль SMTP в HTML не выводится НИКОГДА: только «пароль задан, N символов».
+   Пустое поле «новый пароль» = не менять сохранённое значение.
+
+   Классы — только из уже собранного tailwind.css (DoD роли: набор классов не
+   расширяет артефакт, поэтому пересборка CSS не требуется). #}
+<div id="report-settings" class="bg-white rounded-xl shadow-sm p-4 mb-4">
+    <h2 class="text-base font-bold mb-1">Утренний отчёт</h2>
+    <p class="text-xs text-slate-500 mb-3">
+        Ежедневное письмо с состоянием инфраструктуры (Zabbix + инвентарь).
+        Параметры применяются без перезапуска сервера.
+    </p>
+
+    {% if notice %}
+    <div class="mb-3 px-4 py-2.5 rounded-md text-sm
+        {% if notice_ok %}bg-emerald-50 border border-emerald-300 text-emerald-800
+        {% else %}bg-red-50 border border-red-200 text-red-800{% endif %}">{{ notice }}</div>
+    {% endif %}
+    {% if error %}
+    <div class="mb-3 px-4 py-2.5 rounded-md bg-red-50 border border-red-200 text-sm text-red-800">{{ error }}</div>
+    {% endif %}
+
+    <form hx-post="/admin/settings/report" hx-target="#report-settings"
+          hx-swap="outerHTML" class="grid gap-3">
+        <div>
+            <label class="inline-flex items-center gap-2 text-sm font-medium">
+                <input type="checkbox" name="enabled" value="on"
+                       {% if report.enabled %}checked{% endif %}
+                       class="rounded border-slate-300">
+                Отчёт включён (ежедневная отправка)
+            </label>
+        </div>
+
+        <div class="grid gap-3 md:grid-cols-2">
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1" for="r-time">Время запуска</label>
+                <input id="r-time" name="time" type="time" required
+                       value="{{ report.time }}"
+                       class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                <p class="text-xs text-slate-400 mt-1">Формат HH:MM, таймзона сервиса</p>
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1" for="r-recipients">Получатели</label>
+                <input id="r-recipients" name="recipients" type="text"
+                       value="{{ report.recipients }}"
+                       placeholder="admin@example.org, ops@example.org"
+                       class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                <p class="text-xs text-slate-400 mt-1">
+                    Через запятую/точку с запятой, максимум {{ recipients_max }} адресов.
+                </p>
+            </div>
+        </div>
+
+        <h3 class="text-sm font-semibold mt-2">SMTP (Zimbra)</h3>
+        <div class="grid gap-3 md:grid-cols-3">
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1" for="r-smtp-host">Сервер</label>
+                <input id="r-smtp-host" name="smtp_host" type="text"
+                       value="{{ report.smtp_host }}" placeholder="smtp.example.org"
+                       class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                <p class="text-xs text-slate-400 mt-1">
+                    Только имя хоста/IP: без схемы и порта (порт — отдельное поле).
+                </p>
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1" for="r-smtp-port">Порт</label>
+                <input id="r-smtp-port" name="smtp_port" type="number" min="1" max="65535"
+                       value="{{ report.smtp_port }}"
+                       class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1" for="r-smtp-sec">Защита</label>
+                <select id="r-smtp-sec" name="smtp_security"
+                        onchange="var w=document.getElementById('r-smtp-sec-warn'); if(w){w.style.display=(this.value==='none')?'block':'none';}"
+                        class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                    {% for mode in security_modes %}
+                    <option value="{{ mode }}" {% if report.smtp_security == mode %}selected{% endif %}>{{ mode }}</option>
+                    {% endfor %}
+                </select>
+                <p id="r-smtp-sec-warn" class="text-xs text-red-700 mt-1"
+                   {% if report.smtp_security != 'none' %}style="display:none"{% endif %}>
+                    Внимание: без TLS (none) учётная запись SMTP запрещена —
+                    допустимо только для loopback-адреса (например, localhost).
+                </p>
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1" for="r-smtp-user">Логин</label>
+                <input id="r-smtp-user" name="smtp_user" type="text"
+                       value="{{ report.smtp_user }}" autocomplete="off"
+                       class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1" for="r-smtp-from">Отправитель (From)</label>
+                <input id="r-smtp-from" name="smtp_from" type="text"
+                       value="{{ report.smtp_from }}" placeholder="пусто = логин"
+                       class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1" for="r-smtp-pass">Новый пароль SMTP</label>
+                <input id="r-smtp-pass" name="smtp_password" type="password"
+                       autocomplete="new-password"
+                       placeholder="{% if report.secret_is_set %}не менять{% else %}не задан{% endif %}"
+                       class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">
+                <p class="text-xs mt-1 {% if report.secret_is_set %}text-emerald-700{% else %}text-slate-400{% endif %}">
+                    {% if report.secret_is_set %}
+                    Пароль задан{% if report.secret_length %}, {{ report.secret_length }} симв.{% endif %}
+                    {% else %}
+                    Пароль не задан
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+        <p class="text-xs text-slate-400">
+            Пустое поле пароля — не менять сохранённый. Значение пароля
+            не отображается и не передаётся в HTML (хранится зашифрованным).
+        </p>
+
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="r-subject">Тема письма (шаблон Jinja2)</label>
+            <textarea id="r-subject" name="subject_template" rows="2"
+                      class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">{{ report.subject_template }}</textarea>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1" for="r-body">Тело письма (шаблон Jinja2, текст)</label>
+            <textarea id="r-body" name="body_template" rows="10"
+                      class="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5">{{ report.body_template }}</textarea>
+            <p class="text-xs text-slate-400 mt-1">
+                Доступные переменные: date, total_active_devices, zabbix_alerts,
+                critical, warning, new_problems_count, resolved_count,
+                datastore_low_space, host_high_load, vms_with_snapshots,
+                problems_text, summary_text. Неизвестная переменная рендерится
+                пустой строкой. Максимум {{ template_max_chars }} символов на шаблон.
+            </p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+            <button type="submit"
+                    class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">
+                Сохранить
+            </button>
+            <button type="button"
+                    hx-post="/admin/settings/report/test-email"
+                    hx-target="#report-settings" hx-swap="outerHTML"
+                    hx-disabled-elt="this"
+                    class="px-3 py-1.5 rounded-md border border-slate-300 text-sm font-medium hover:bg-slate-100">
+                Отправить тестовое письмо
+            </button>
+            <button type="button"
+                    hx-post="/admin/settings/report/run-now"
+                    hx-target="#report-settings" hx-swap="outerHTML"
+                    hx-disabled-elt="this"
+                    class="px-3 py-1.5 rounded-md border border-slate-300 text-sm font-medium hover:bg-slate-100">
+                Запустить отчёт сейчас
+            </button>
+            <img src="/admin/static/img/spinner.svg" class="htmx-indicator"
+                 width="16" height="16" alt="...">
+        </div>
+    </form>
+
+    {% include "components/settings/report_status.html" %}
+</div>

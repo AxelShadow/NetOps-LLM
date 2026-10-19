@@ -79,6 +79,22 @@ SUITES: list[tuple[str, Path, Path, list[str], str]] = [
     ("tests/test_printer_discovery.py (Этап 19)", BE_PY, BACKEND_DIR, ["tests/test_printer_discovery.py"],       "tests/test_printer_discovery.py"),
     ("tests/test_printers_pages_report.py (Этап 20)", BE_PY, BACKEND_DIR, ["tests/test_printers_pages_report.py"], "tests/test_printers_pages_report.py"),
     ("tests/test_agent_settings.py (Этап 20)",  BE_PY, BACKEND_DIR, ["tests/test_agent_settings.py"],           "tests/test_agent_settings.py"),
+    # --- RAG по runbook'ам (Этап 21): новые наборы --------------------------
+    ("tests/test_rag_store.py (RAG)",        BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_rag_store.py", "-q"],     "tests/test_rag_store.py"),
+    ("tests/test_rag_indexer.py (RAG)",      BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_rag_indexer.py", "-q"],   "tests/test_rag_indexer.py"),
+    ("tests/test_rag_service.py (RAG)",      BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_rag_service.py", "-q"],   "tests/test_rag_service.py"),
+    ("tests/test_rag_tool.py (RAG)",         BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_rag_tool.py", "-q"],      "tests/test_rag_tool.py"),
+    # --- Утренний отчёт (Этап 22): новые наборы -----------------------------
+    ("tests/test_scheduler_service.py (утренний отчёт)", BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_scheduler_service.py", "-q"], "tests/test_scheduler_service.py"),
+    ("tests/test_scheduler_jobs.py (утренний отчёт)",    BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_scheduler_jobs.py", "-q"],    "tests/test_scheduler_jobs.py"),
+    ("tests/test_email_delivery.py (утренний отчёт)",    BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_email_delivery.py", "-q"],    "tests/test_email_delivery.py"),
+    ("tests/test_report_parsing.py (утренний отчёт)",    BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_report_parsing.py", "-q"],    "tests/test_report_parsing.py"),
+    ("tests/test_settings_store.py (runtime-настройки)", BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_settings_store.py", "-q"],   "tests/test_settings_store.py"),
+    ("tests/test_admin_ui_report_settings.py (админка отчёта)", BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_admin_ui_report_settings.py", "-q"], "tests/test_admin_ui_report_settings.py"),
+    # --- независимая регрессия QA (роль qa, свои файлы) ---------------------
+    ("tests/test_rag_pipeline_qa.py (QA RAG)",        BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_rag_pipeline_qa.py", "-q"],        "tests/test_rag_pipeline_qa.py"),
+    ("tests/test_scheduler_qa.py (QA утренний отчёт)", BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_scheduler_qa.py", "-q"],           "tests/test_scheduler_qa.py"),
+    ("tests/test_admin_ui_report_qa.py (QA админка)",  BE_PY, BACKEND_DIR, ["-m", "pytest", "tests/test_admin_ui_report_qa.py", "-q"],      "tests/test_admin_ui_report_qa.py"),
     # --- chainlit: интерпретатор chainlit/.venv, cwd chainlit/ ---
     ("sse_parser_test.py",                   CL_PY, CHAINLIT_DIR, ["sse_parser_test.py"],                         "sse_parser_test.py"),
     ("dev_sse/scenarios_test.py",            CL_PY, CHAINLIT_DIR, ["dev_sse/scenarios_test.py"],                   "dev_sse/scenarios_test.py"),

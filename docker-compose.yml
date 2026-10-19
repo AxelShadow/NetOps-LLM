@@ -9,6 +9,19 @@ services:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
 
+  # Векторное хранилище RAG по runbook'ам (Этап 21). Отдельный сервис, а не
+  # зависимость образа app: qdrant-client тянет grpcio и раздувает образ
+  # (после инцидента ENOSPC образы бережём — docs/docker-image-size/).
+  # Наружу порт НЕ пробрасывается: доступ только из сети compose по qdrant:6333,
+  # поэтому HTTP-API Qdrant не оказывается на хосте.
+  qdrant:
+    # Явный пин конкретного патч-тега (не latest и не мажорный v1):
+    # обновление версии — осознанное действие с проверкой совместимости.
+    image: qdrant/qdrant:v1.19.2
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+
   app:
     build: ./backend
     env_file: .env
@@ -16,7 +29,20 @@ services:
       # :? — crypto.py падает при пустом ключе в проде (fail-fast на старте,
       # а не молчаливая смена ключа и «неверный пароль» на устройствах)
       NETOPS_ENCRYPTION_KEY: ${NETOPS_ENCRYPTION_KEY:?задайте в .env (см. .env.example)}
-    depends_on: [db]
+      # --- RAG по runbook'ам (Этап 21) ---
+      # Адрес Qdrant — имя сервиса во внутренней сети compose, не наружу.
+      NETOPS_RAG_QDRANT_URL: http://qdrant:6333
+      # Каталог документов ВНУТРИ контейнера: ./runbooks монтируется ниже :ro.
+      NETOPS_RAG_DOCS_DIR: /data/runbooks
+      # Оба флага по умолчанию выключены: включаются оператором в .env,
+      # чтобы прод без RAG/планировщика стартовал как раньше.
+      NETOPS_RAG_ENABLED: ${NETOPS_RAG_ENABLED:-false}
+      NETOPS_SCHEDULER_ENABLED: ${NETOPS_SCHEDULER_ENABLED:-false}
+    volumes:
+      # Корпус runbook'ов: правки на хосте подхватываются переиндексацией
+      # без пересборки образа. :ro — приложение документы только читает.
+      - ./runbooks:/data/runbooks:ro
+    depends_on: [db, qdrant]
     restart: unless-stopped
 
   # Чат-приложение Chainlit (Фаза 11). Тонкий клиент FastAPI
@@ -59,3 +85,7 @@ services:
 
 volumes:
   pgdata:
+  # Индекс Qdrant. Пересоздаётся переиндексацией runbook'ов; вместе с pgdata
+  # НЕ удаляется: `docker compose down -v` на проде запрещён (см.
+  # docs/docker-image-size/host-disk-runbook.md, раздел 3.7).
+  qdrant_storage:
